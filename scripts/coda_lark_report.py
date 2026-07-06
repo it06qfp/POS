@@ -483,7 +483,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     draw.rounded_rectangle(
                         [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=badge_h / 2, fill=BADGE_BG,
                     )
-                    draw.text((badge_x + badge_pad_x, badge_y + badge_pad_y), badge_text, font=font_badge, fill=WHITE)
+                    draw.text((badge_x + badge_w / 2, badge_y + badge_h / 2), badge_text, font=font_badge, fill=WHITE, anchor="mm")
 
                     ly = badge_y + badge_h + 6
                     for line in wrap_text(draw, records[run_start]["Group"], font_group, group_width - 16):
