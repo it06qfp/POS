@@ -391,7 +391,9 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
         else:
             row_heights.append(58)
 
-    count_area_h = font_footer.size + 10  # reserved space for the "N รายการ" line at the bottom of each group
+    GROUP_BLOCK_GAP = 6
+    label_line_h = font_group.size + 4
+    count_line_h = font_footer.size + 4
 
     if grouped and records:
         run_start, n = 0, len(records)
@@ -402,7 +404,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     len(wrap_text(probe, part or "-", font_group, g["width"] - 16))
                     for g, part in zip(group_spec, records[run_start]["GroupParts"])
                 )
-                needed_h = 8 + max_lines * (font_group.size + 4) + 6 + count_area_h + 8
+                needed_h = 8 + max_lines * label_line_h + GROUP_BLOCK_GAP + count_line_h + 8
                 shortfall = needed_h - sum(row_heights[run_start:run_end + 1])
                 if shortfall > 0:
                     row_heights[run_end] += shortfall
@@ -495,17 +497,25 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     count = run_end - run_start + 1
                     parts = records[run_start]["GroupParts"]
 
+                    part_lines = [wrap_text(draw, part or "-", font_group, g["width"] - 16) for g, part in zip(group_spec, parts)]
+                    label_block_h = max(len(lines) for lines in part_lines) * label_line_h
+                    block_h = label_block_h + GROUP_BLOCK_GAP + count_line_h
+                    start_y = top_y + (group_h - block_h) / 2
+
                     gx = table_left
-                    for g, part in zip(group_spec, parts):
+                    for g, lines in zip(group_spec, part_lines):
                         draw.rectangle([gx, top_y, gx + g["width"], top_y + group_h], fill=GROUP_BG, outline=BORDER)
-                        ly = top_y + 8
-                        for line in wrap_text(draw, part or "-", font_group, g["width"] - 16):
-                            draw.text((gx + 8, ly), line, font=font_group, fill=DARK)
-                            ly += font_group.size + 4
+                        ly = start_y
+                        for line in lines:
+                            draw.text((gx + g["width"] / 2, ly), line, font=font_group, fill=DARK, anchor="mt")
+                            ly += label_line_h
                         gx += g["width"]
 
                     count_text = f"{count} รายการ"
-                    draw.text((table_left + group_width / 2, bottom_y - 8), count_text, font=font_footer, fill=GRAY, anchor="mb")
+                    draw.text(
+                        (table_left + group_width / 2, start_y + label_block_h + GROUP_BLOCK_GAP),
+                        count_text, font=font_footer, fill=GRAY, anchor="mt",
+                    )
                     run_start = i
     else:
         draw.rectangle([table_left, y, table_left + total_col_width, y + empty_row_h], fill=ALT_ROW_BG, outline=BORDER)
