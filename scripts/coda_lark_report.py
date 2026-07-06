@@ -100,9 +100,10 @@ COL_WIDTHS = {
 GROUP_WIDTH = 200
 SORT_KEYS = ["DO", "Account"]
 
-# --- report 2 schema (OP เลือก PD/PU, flat table -- no grouping) ---
+# --- report 1 schema (OP เลือก PD/PU, grouped by วันแจ้งPOS) ---
+NOTIFY_DATE_COL_OP_PDPU = "c-n3S3kQntLR"  # วันแจ้งPOS -- group column
+
 COLUMNS_OP_PDPU = [
-    ("c-n3S3kQntLR", "NotifyDate"),
     ("c-lCcIWuw_5l", "DO"),
     ("c-q7-C1QWCWh", "PDPUMain"),
     ("c-qKzCANG9Mi", "AccountCode"),
@@ -113,11 +114,10 @@ COLUMNS_OP_PDPU = [
     ("c-UYhihPAYaK", "Unit"),
     ("c-5h8f1Bhotx", "CRD"),
 ]
-DATE_KEYS_OP_PDPU = {"NotifyDate", "CRD"}
+DATE_KEYS_OP_PDPU = {"CRD"}
 NUM_KEYS_OP_PDPU = {"ShipQty"}
 
 HEADERS_TH_OP_PDPU = {
-    "NotifyDate": "วันแจ้งPOS",
     "DO": "DO-shipment",
     "PDPUMain": "PD/PU Main",
     "AccountCode": "Account Code",
@@ -129,15 +129,18 @@ HEADERS_TH_OP_PDPU = {
     "CRD": "CRD",
 }
 COL_WIDTHS_OP_PDPU = {
-    "NotifyDate": 100, "DO": 145, "PDPUMain": 70, "AccountCode": 100, "Account": 200,
+    "DO": 145, "PDPUMain": 70, "AccountCode": 100, "Account": 200,
     "ProdCode": 110, "ProdName": 380, "ShipQty": 105, "Unit": 55, "CRD": 95,
 }
+GROUP_WIDTH_OP_PDPU = 130
 SORT_KEYS_OP_PDPU = ["DO", "Account"]
 
 # --- report 3 schema (production-queue table) ---
 STATUS_COL_PQ = "c-B0Rs5QyYq3"  # Status
 ORDER_SHIPMENT_COL_PQ = "c-IrtKcErAtQ"
 CREATED_COL_PQ = "c-kJEll1twNl"  # Created(thisRow)
+PDPU_COL_PQ = "c-e3K7rOgynm"  # PD/PU -- group column (with Account Name)
+ACCOUNT_COL_PQ = "c-zZsm603C_I"  # Account Name -- group column (with PD/PU)
 STATUS_EXCLUDE_PQ = {"จองคิวผลิตแล้ว", "ยกเลิกการเช็คแผนผลิต"}
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
@@ -166,8 +169,6 @@ CREATED_CUTOFF_PQ = (to_bangkok_naive(datetime.now(timezone.utc)) - timedelta(da
 )
 
 COLUMNS_PQ = [
-    ("c-e3K7rOgynm", "PDPU"),
-    ("c-zZsm603C_I", "Account"),
     ("c-KYT8U1bMj2", "SONo"),
     ("c-7PpTcmbFqx", "CRD"),
     ("c-hJnPkumoJi", "ProdCode"),
@@ -183,8 +184,6 @@ DATE_KEYS_PQ = {"CRD"}
 NUM_KEYS_PQ = {"Qty"}
 
 HEADERS_TH_PQ = {
-    "PDPU": "PD/PU",
-    "Account": "Account Name",
     "SONo": "SO No.",
     "CRD": "CRD",
     "ProdCode": "Product Code",
@@ -197,11 +196,12 @@ HEADERS_TH_PQ = {
     "Sales": "Sales",
 }
 COL_WIDTHS_PQ = {
-    "PDPU": 60, "Account": 220, "SONo": 120, "CRD": 95, "ProdCode": 110,
+    "SONo": 120, "CRD": 95, "ProdCode": 110,
     "ProdName": 340, "Qty": 90, "Unit": 55, "Status": 190, "CATRoll": 150,
     "DeliveryPoint": 100, "Sales": 160,
 }
-SORT_KEYS_PQ = ["PDPU", "Account"]
+GROUP_WIDTH_PQ = 220
+SORT_KEYS_PQ = ["CRD", "SONo"]
 
 FONT_REGULAR_CANDIDATES = [
     "/usr/share/fonts/truetype/tlwg/Waree.ttf",
@@ -275,7 +275,7 @@ def fetch_rows(table_id, visible_cols):
     return rows
 
 
-def build_records(raw_rows, matches, columns, date_keys, num_keys, group_col, sort_keys):
+def build_records(raw_rows, matches, columns, date_keys, num_keys, group_col, sort_keys, group_date_cols=frozenset()):
     records = []
     for row in raw_rows:
         vals = row.get("values", {})
@@ -283,7 +283,13 @@ def build_records(raw_rows, matches, columns, date_keys, num_keys, group_col, so
             continue
         rec = {}
         if group_col:
-            rec["Group"] = extract_value(vals.get(group_col)) or "(ไม่ระบุ)"
+            group_cols = group_col if isinstance(group_col, tuple) else (group_col,)
+            parts = []
+            for c in group_cols:
+                raw = vals.get(c)
+                part = fmt_date(raw) if c in group_date_cols else str(extract_value(raw) or "")
+                parts.append(part if part != "-" else "")
+            rec["Group"] = " / ".join(p for p in parts if p) or "(ไม่ระบุ)"
         for col_id, key in columns:
             raw = vals.get(col_id)
             if key in date_keys:
@@ -512,9 +518,10 @@ REPORTS = [
         "extra_filter_cols": [STATUS_COL],
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) == STATUS_FILTER_VALUE,
         "filter_desc": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
-        "group_col": None,
-        "group_label": None,
-        "group_width": 0,
+        "group_col": NOTIFY_DATE_COL_OP_PDPU,
+        "group_label": "วันแจ้งPOS",
+        "group_width": GROUP_WIDTH_OP_PDPU,
+        "group_date_cols": {NOTIFY_DATE_COL_OP_PDPU},
         "columns": COLUMNS_OP_PDPU,
         "headers": HEADERS_TH_OP_PDPU,
         "col_widths": COL_WIDTHS_OP_PDPU,
@@ -555,9 +562,9 @@ REPORTS = [
             "(Status not in {จองคิวผลิตแล้ว, ยกเลิกการเช็คแผนผลิต} OR Order-Shipment blank) "
             f"AND Created > {CREATED_CUTOFF_PQ.isoformat()} (Asia/Bangkok)"
         ),
-        "group_col": None,
-        "group_label": None,
-        "group_width": 0,
+        "group_col": (PDPU_COL_PQ, ACCOUNT_COL_PQ),
+        "group_label": "PD/PU / Account Name",
+        "group_width": GROUP_WIDTH_PQ,
         "columns": COLUMNS_PQ,
         "headers": HEADERS_TH_PQ,
         "col_widths": COL_WIDTHS_PQ,
@@ -570,18 +577,18 @@ REPORTS = [
     {
         "table_id": TABLE_ID_OP_PDPU,
         "title": "รอแจ้ง/Hold/ยกเลิก",
-        "extra_filter_cols": [STATUS_COL],
+        "extra_filter_cols": [],
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) in STATUS_INCLUDE_HOLD,
         "filter_desc": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)}",
-        "group_col": None,
-        "group_label": None,
-        "group_width": 0,
-        "columns": COLUMNS_OP_PDPU,
-        "headers": HEADERS_TH_OP_PDPU,
-        "col_widths": COL_WIDTHS_OP_PDPU,
-        "date_keys": DATE_KEYS_OP_PDPU,
-        "num_keys": NUM_KEYS_OP_PDPU,
-        "sort_keys": SORT_KEYS_OP_PDPU,
+        "group_col": GROUP_COL,
+        "group_label": "รายการแจ้งเปลี่ยนแปลง",
+        "group_width": GROUP_WIDTH,
+        "columns": COLUMNS,
+        "headers": HEADERS_TH,
+        "col_widths": COL_WIDTHS,
+        "date_keys": DATE_KEYS,
+        "num_keys": NUM_KEYS,
+        "sort_keys": SORT_KEYS,
         "wrap_key": "ProdName",
         "out_path": "pos_hold_cancel_grouped.png",
     },
@@ -591,13 +598,14 @@ REPORTS = [
 def main():
     for report in REPORTS:
         print(f"--- {report['title']} (table {report['table_id']}) ---")
-        group_cols = [report["group_col"]] if report["group_col"] else []
+        gc = report["group_col"]
+        group_cols = list(gc) if isinstance(gc, tuple) else ([gc] if gc else [])
         visible_cols = group_cols + report["extra_filter_cols"] + [c for c, _ in report["columns"]]
         raw_rows = fetch_rows(report["table_id"], visible_cols)
         print(f"Fetched {len(raw_rows)} raw rows from Coda table {report['table_id']}")
         records = build_records(
             raw_rows, report["matches"], report["columns"], report["date_keys"], report["num_keys"],
-            report["group_col"], report["sort_keys"],
+            report["group_col"], report["sort_keys"], report.get("group_date_cols", frozenset()),
         )
         print(f"{len(records)} rows match filter ({report['filter_desc']})")
         render_image(
