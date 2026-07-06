@@ -2,9 +2,11 @@
 """
 POS Daily Lark report.
 
-Pulls rows from a Coda table (filtered to rows where "รอคุยในที่ประชุม" is
-blank), renders a grouped table image (merged group cells, wrapped product
-names), and posts the image to a Lark group via incoming webhook.
+Pulls rows from two Coda tables -- (1) the meeting table filtered to rows
+where "รอคุยในที่ประชุม" is blank, and (2) the master DO-Shipment table
+filtered to rows where Status_DO-Shipment = "OP เลือก PD/PU" -- renders a
+grouped table image per report (merged group cells, wrapped product names),
+and posts each image to a Lark group via incoming webhook.
 
 Required environment variables (set as GitHub Actions secrets):
   CODA_API_TOKEN     Coda API token (coda.io -> Account Settings -> API Settings)
@@ -13,8 +15,9 @@ Required environment variables (set as GitHub Actions secrets):
   LARK_WEBHOOK_URL   Full Lark incoming-webhook URL
 
 Optional:
-  CODA_DOC_ID        default "MiXbfRif1m"
-  CODA_TABLE_ID      default "table-OA56XddNFI"
+  CODA_DOC_ID           default "MiXbfRif1m"
+  CODA_TABLE_ID         default "table-OA56XddNFI" (meeting report)
+  CODA_TABLE_ID_OP_PDPU default "table-1mLj_7ktbc" (OP เลือก PD/PU report)
 """
 import json
 import os
@@ -32,8 +35,11 @@ LARK_WEBHOOK_URL = os.environ["LARK_WEBHOOK_URL"]
 
 DOC_ID = os.environ.get("CODA_DOC_ID", "MiXbfRif1m")
 TABLE_ID = os.environ.get("CODA_TABLE_ID", "table-OA56XddNFI")
+TABLE_ID_OP_PDPU = os.environ.get("CODA_TABLE_ID_OP_PDPU", "table-1mLj_7ktbc")
 
 FILTER_COL = "c-i7ekT7SOM_"  # รอคุยในที่ประชุม -- must be blank to include the row
+STATUS_COL = "c-HvRU96fdFo"  # Status_DO-Shipment
+STATUS_FILTER_VALUE = "OP เลือก PD/PU"
 GROUP_COL = "c-jF5iOvd80f"  # รายการแจ้งเปลี่ยนแปลง -- merged group column
 
 COLUMNS = [
@@ -130,10 +136,10 @@ def fmt_num(raw):
         return str(v) if v else "-"
 
 
-def fetch_rows():
-    base = f"https://coda.io/apis/v1/docs/{DOC_ID}/tables/{TABLE_ID}/rows"
+def fetch_rows(table_id, filter_col):
+    base = f"https://coda.io/apis/v1/docs/{DOC_ID}/tables/{table_id}/rows"
     headers = {"Authorization": f"Bearer {CODA_API_TOKEN}"}
-    visible_cols = [FILTER_COL, GROUP_COL] + [c for c, _ in COLUMNS]
+    visible_cols = [filter_col, GROUP_COL] + [c for c, _ in COLUMNS]
     base_params = {"valueFormat": "simple", "limit": 500, "visibleColumns": ",".join(visible_cols)}
 
     rows = []
@@ -151,11 +157,11 @@ def fetch_rows():
     return rows
 
 
-def build_records(raw_rows):
+def build_records(raw_rows, filter_col, matches):
     records = []
     for row in raw_rows:
         vals = row.get("values", {})
-        if not is_blank(vals.get(FILTER_COL)):
+        if not matches(vals.get(filter_col)):
             continue
         rec = {"Group": extract_value(vals.get(GROUP_COL)) or "(ไม่ระบุ)"}
         for col_id, key in COLUMNS:
@@ -209,7 +215,7 @@ def fit_text_font(draw, text, font, max_width, min_size=9):
     return fitted
 
 
-def render_image(records, out_path):
+def render_image(records, out_path, title, context_label, table_id):
     font_title = pick_font(FONT_BOLD_CANDIDATES, 24)
     font_subtitle = pick_font(FONT_REGULAR_CANDIDATES, 14)
     font_header = pick_font(FONT_BOLD_CANDIDATES, 12)
@@ -250,9 +256,9 @@ def render_image(records, out_path):
     img = Image.new("RGB", (canvas_width, canvas_height), "white")
     draw = ImageDraw.Draw(img)
 
-    draw.text((margin, 15), "รายการประชุม POS Daily Day", font=font_title, fill=NAVY)
+    draw.text((margin, 15), title, font=font_title, fill=NAVY)
     today_str = datetime.now().strftime("%d/%m/%Y")
-    subtitle = f"รอคุยในที่ประชุม (ว่าง)  |  ตาราง {TABLE_ID}  |  ข้อมูล ณ วันที่ {today_str}"
+    subtitle = f"{context_label}  |  ตาราง {table_id}  |  ข้อมูล ณ วันที่ {today_str}"
     draw.text((margin, 50), subtitle, font=font_subtitle, fill=GRAY)
 
     if not records:
@@ -350,7 +356,7 @@ def send_to_lark(image_path):
             "https://open.larksuite.com/open-apis/im/v1/images",
             headers={"Authorization": f"Bearer {token}"},
             data={"image_type": "message"},
-            files={"image": ("pos_daily_grouped.png", f, "image/png")},
+            files={"image": (os.path.basename(image_path), f, "image/png")},
             timeout=60,
         )
     upload_resp.raise_for_status()
@@ -369,15 +375,38 @@ def send_to_lark(image_path):
         sys.exit(1)
 
 
+REPORTS = [
+    {
+        "table_id": TABLE_ID,
+        "title": "รายการประชุม POS Daily Day",
+        "context_label": "รอคุยในที่ประชุม (ว่าง)",
+        "filter_col": FILTER_COL,
+        "matches": is_blank,
+        "filter_desc": "รอคุยในที่ประชุม is blank",
+        "out_path": "pos_daily_grouped.png",
+    },
+    {
+        "table_id": TABLE_ID_OP_PDPU,
+        "title": "รายการรอ OP เลือก PD/PU",
+        "context_label": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
+        "filter_col": STATUS_COL,
+        "matches": lambda raw: extract_value(raw) == STATUS_FILTER_VALUE,
+        "filter_desc": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
+        "out_path": "pos_op_pdpu_grouped.png",
+    },
+]
+
+
 def main():
-    raw_rows = fetch_rows()
-    print(f"Fetched {len(raw_rows)} raw rows from Coda table {TABLE_ID}")
-    records = build_records(raw_rows)
-    print(f"{len(records)} rows match filter (รอคุยในที่ประชุม is blank)")
-    out_path = "pos_daily_grouped.png"
-    render_image(records, out_path)
-    print(f"Saved image: {out_path}")
-    send_to_lark(out_path)
+    for report in REPORTS:
+        print(f"--- {report['title']} (table {report['table_id']}) ---")
+        raw_rows = fetch_rows(report["table_id"], report["filter_col"])
+        print(f"Fetched {len(raw_rows)} raw rows from Coda table {report['table_id']}")
+        records = build_records(raw_rows, report["filter_col"], report["matches"])
+        print(f"{len(records)} rows match filter ({report['filter_desc']})")
+        render_image(records, report["out_path"], report["title"], report["context_label"], report["table_id"])
+        print(f"Saved image: {report['out_path']}")
+        send_to_lark(report["out_path"])
 
 
 if __name__ == "__main__":
