@@ -72,7 +72,7 @@ HEADERS_TH = {
     "Status": "Status_DO-Shipment",
 }
 COL_WIDTHS = {
-    "Account": 240, "DO": 130, "OrderQty": 95, "ShipQty": 105, "Unit": 50,
+    "Account": 240, "DO": 145, "OrderQty": 95, "ShipQty": 105, "Unit": 50,
     "PDPU": 65, "MOPR": 110, "ProdCode": 110, "ProdName": 380, "CRD0": 95,
     "CRDEdit": 100, "LoadConfirm": 95, "ArriveDate": 100, "Status": 160,
 }
@@ -197,6 +197,18 @@ def wrap_text(draw, text, font, max_width):
     return lines or [""]
 
 
+def fit_text_font(draw, text, font, max_width, min_size=9):
+    text = str(text)
+    if not hasattr(font, "path") or draw.textlength(text, font=font) <= max_width:
+        return font
+    size = font.size
+    fitted = font
+    while draw.textlength(text, font=fitted) > max_width and size > min_size:
+        size -= 1
+        fitted = ImageFont.truetype(font.path, size)
+    return fitted
+
+
 def render_image(records, out_path):
     font_title = pick_font(FONT_BOLD_CANDIDATES, 24)
     font_subtitle = pick_font(FONT_REGULAR_CANDIDATES, 14)
@@ -251,16 +263,20 @@ def render_image(records, out_path):
     table_top, table_left = title_area_h, margin
 
     def centered_text(x, y, w, h, text, font, fill):
+        max_width = w - 16
+        font = fit_text_font(draw, text, font, max_width)
         tw = draw.textlength(str(text), font=font)
         draw.text((x + max(6, (w - tw) / 2), y + h / 2 - font.size / 2), str(text), font=font, fill=fill)
 
     def wrapped_header_text(x, y, w, h, text, font, fill):
-        lines = wrap_text(draw, text, font, w - 12)
+        max_width = w - 12
+        lines = wrap_text(draw, text, font, max_width)
         line_h = font.size + 4
         start_y = y + h / 2 - (len(lines) * line_h) / 2
         for j, line in enumerate(lines):
-            tw = draw.textlength(line, font=font)
-            draw.text((x + max(6, (w - tw) / 2), start_y + j * line_h), line, font=font, fill=fill)
+            line_font = fit_text_font(draw, line, font, max_width)
+            tw = draw.textlength(line, font=line_font)
+            draw.text((x + max(6, (w - tw) / 2), start_y + j * line_h), line, font=line_font, fill=fill)
 
     x = table_left
     draw.rectangle([x, table_top, x + GROUP_WIDTH, table_top + header_h], fill=HEADER_BG, outline=BORDER)
