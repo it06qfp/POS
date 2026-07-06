@@ -200,7 +200,7 @@ def wrap_text(draw, text, font, max_width):
 def render_image(records, out_path):
     font_title = pick_font(FONT_BOLD_CANDIDATES, 24)
     font_subtitle = pick_font(FONT_REGULAR_CANDIDATES, 14)
-    font_header = pick_font(FONT_BOLD_CANDIDATES, 13)
+    font_header = pick_font(FONT_BOLD_CANDIDATES, 12)
     font_group = pick_font(FONT_BOLD_CANDIDATES, 14)
     font_bold_cell = pick_font(FONT_BOLD_CANDIDATES, 13)
     font_cell = pick_font(FONT_REGULAR_CANDIDATES, 13)
