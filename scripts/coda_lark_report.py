@@ -30,6 +30,10 @@ Optional:
   CODA_TABLE_ID            default "table-OA56XddNFI"     (meeting report)
   CODA_TABLE_ID_OP_PDPU    default "table-1mLj_7ktbc"     (OP เลือก PD/PU report)
   CODA_TABLE_ID_PROD_QUEUE default "grid-z9ENI7PaD5"      (production-queue report)
+
+  LARK_APP_ID_2, LARK_APP_SECRET_2, LARK_WEBHOOK_URL_2
+      Credentials for a second Lark bot/group. If all three are set, every
+      report image is also posted there in addition to the primary bot.
 """
 import json
 import os
@@ -44,6 +48,15 @@ CODA_API_TOKEN = os.environ["CODA_API_TOKEN"]
 LARK_APP_ID = os.environ["LARK_APP_ID"]
 LARK_APP_SECRET = os.environ["LARK_APP_SECRET"]
 LARK_WEBHOOK_URL = os.environ["LARK_WEBHOOK_URL"]
+
+LARK_BOTS = [{"label": "primary", "app_id": LARK_APP_ID, "app_secret": LARK_APP_SECRET, "webhook_url": LARK_WEBHOOK_URL}]
+_LARK_APP_ID_2 = os.environ.get("LARK_APP_ID_2")
+_LARK_APP_SECRET_2 = os.environ.get("LARK_APP_SECRET_2")
+_LARK_WEBHOOK_URL_2 = os.environ.get("LARK_WEBHOOK_URL_2")
+if _LARK_APP_ID_2 and _LARK_APP_SECRET_2 and _LARK_WEBHOOK_URL_2:
+    LARK_BOTS.append({
+        "label": "secondary", "app_id": _LARK_APP_ID_2, "app_secret": _LARK_APP_SECRET_2, "webhook_url": _LARK_WEBHOOK_URL_2,
+    })
 
 DOC_ID = os.environ.get("CODA_DOC_ID", "MiXbfRif1m")
 TABLE_ID = os.environ.get("CODA_TABLE_ID", "table-OA56XddNFI")
@@ -510,10 +523,10 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     img.save(out_path)
 
 
-def send_to_lark(image_path):
+def send_to_lark(image_path, app_id, app_secret, webhook_url):
     auth_resp = requests.post(
         "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal",
-        json={"app_id": LARK_APP_ID, "app_secret": LARK_APP_SECRET},
+        json={"app_id": app_id, "app_secret": app_secret},
         timeout=30,
     )
     auth_resp.raise_for_status()
@@ -531,7 +544,7 @@ def send_to_lark(image_path):
     image_key = upload_resp.json()["data"]["image_key"]
 
     send_resp = requests.post(
-        LARK_WEBHOOK_URL,
+        webhook_url,
         json={"msg_type": "image", "content": {"image_key": image_key}},
         timeout=30,
     )
@@ -655,7 +668,9 @@ def main():
             report["group_label"], report["wrap_key"], report.get("theme"),
         )
         print(f"Saved image: {report['out_path']}")
-        send_to_lark(report["out_path"])
+        for bot in LARK_BOTS:
+            send_to_lark(report["out_path"], bot["app_id"], bot["app_secret"], bot["webhook_url"])
+            print(f"Sent to Lark ({bot['label']})")
 
 
 if __name__ == "__main__":
