@@ -320,6 +320,28 @@ def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, s
     return records
 
 
+MAX_ROWS_PER_IMAGE = 50
+
+
+def cap_records(records, max_rows=MAX_ROWS_PER_IMAGE):
+    """Cap the rows rendered into one image so it can't grow unboundedly tall.
+
+    For grouped reports, a group in progress is always finished rather than
+    split mid-group, so the actual cutoff can land slightly past max_rows.
+    """
+    total = len(records)
+    if total <= max_rows:
+        return records, total
+    if not records or "GroupKey" not in records[0]:
+        return records[:max_rows], total
+    capped = []
+    for r in records:
+        if len(capped) >= max_rows and r["GroupKey"] != capped[-1]["GroupKey"]:
+            break
+        capped.append(r)
+    return capped, total
+
+
 def pick_font(candidates, size):
     for path in candidates:
         if os.path.exists(path):
@@ -376,8 +398,9 @@ DEFAULT_THEME = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (
 
 
 def render_image(records, out_path, title, columns, headers_th, col_widths, group_spec,
-                  wrap_key=None, theme=None):
+                  wrap_key=None, theme=None, total_count=None):
     theme = {**DEFAULT_THEME, **(theme or {})}
+    total_count = len(records) if total_count is None else total_count
     grouped = bool(group_spec)
     group_width = sum(g["width"] for g in group_spec) if grouped else 0
 
@@ -544,7 +567,13 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     )
 
     footer_y = table_top + header_h + total_rows_h + 10
-    draw.text((table_left, footer_y), f"รวมทั้งหมด {len(records)} รายการ", font=font_footer, fill=GRAY)
+    if len(records) < total_count:
+        footer_text = f"แสดง {len(records)} จาก {total_count} รายการ (ดูรายการที่เหลือใน Coda)"
+        footer_fill = EMPTY_RED
+    else:
+        footer_text = f"รวมทั้งหมด {total_count} รายการ"
+        footer_fill = GRAY
+    draw.text((table_left, footer_y), footer_text, font=font_footer, fill=footer_fill)
 
     img.save(out_path)
 
@@ -682,10 +711,13 @@ def main():
             group_spec, report["sort_keys"],
         )
         print(f"{len(records)} rows match filter ({report['filter_desc']})")
+        records, total_count = cap_records(records)
+        if len(records) < total_count:
+            print(f"::warning::Capped image to {len(records)}/{total_count} rows for {report['title']}")
         render_image(
             records, report["out_path"], report["title"],
             report["columns"], report["headers"], report["col_widths"], group_spec,
-            report["wrap_key"], report.get("theme"),
+            report["wrap_key"], report.get("theme"), total_count,
         )
         print(f"Saved image: {report['out_path']}")
         for bot in LARK_BOTS:
