@@ -213,7 +213,8 @@ COL_WIDTHS_PQ = {
     "ProdName": 340, "Qty": 90, "Unit": 55, "Status": 190, "CATRoll": 150,
     "DeliveryPoint": 100, "Sales": 160,
 }
-GROUP_WIDTH_PQ = 220
+PDPU_GROUP_WIDTH_PQ = 70
+ACCOUNT_GROUP_WIDTH_PQ = 180
 SORT_KEYS_PQ = ["CRD", "SONo"]
 
 FONT_REGULAR_CANDIDATES = [
@@ -288,21 +289,21 @@ def fetch_rows(table_id, visible_cols):
     return rows
 
 
-def build_records(raw_rows, matches, columns, date_keys, num_keys, group_col, sort_keys, group_date_cols=frozenset()):
+def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, sort_keys):
     records = []
     for row in raw_rows:
         vals = row.get("values", {})
         if not matches(vals):
             continue
         rec = {}
-        if group_col:
-            group_cols = group_col if isinstance(group_col, tuple) else (group_col,)
+        if group_spec:
             parts = []
-            for c in group_cols:
-                raw = vals.get(c)
-                part = fmt_date(raw) if c in group_date_cols else str(extract_value(raw) or "")
+            for g in group_spec:
+                raw = vals.get(g["col"])
+                part = fmt_date(raw) if g.get("is_date") else str(extract_value(raw) or "")
                 parts.append(part if part != "-" else "")
-            rec["Group"] = " / ".join(p for p in parts if p) or "(ไม่ระบุ)"
+            rec["GroupParts"] = parts
+            rec["GroupKey"] = tuple(parts)
         for col_id, key in columns:
             raw = vals.get(col_id)
             if key in date_keys:
@@ -314,7 +315,7 @@ def build_records(raw_rows, matches, columns, date_keys, num_keys, group_col, so
                 rec[key] = str(v) if v not in (None, "") else "-"
         records.append(rec)
 
-    group_prefix = ["Group"] if group_col else []
+    group_prefix = ["GroupKey"] if group_spec else []
     records.sort(key=lambda r: tuple([r[k] for k in group_prefix + sort_keys]))
     return records
 
@@ -358,18 +359,16 @@ def fit_text_font(draw, text, font, max_width, min_size=9):
 DEFAULT_THEME = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (255, 244, 214)}
 
 
-def render_image(records, out_path, title, columns, headers_th, col_widths, group_width, group_label,
+def render_image(records, out_path, title, columns, headers_th, col_widths, group_spec,
                   wrap_key=None, theme=None):
     theme = {**DEFAULT_THEME, **(theme or {})}
-    grouped = bool(group_label) and group_width > 0
-    if not grouped:
-        group_width = 0
+    grouped = bool(group_spec)
+    group_width = sum(g["width"] for g in group_spec) if grouped else 0
 
     font_title = pick_font(FONT_BOLD_CANDIDATES, 24)
     font_subtitle = pick_font(FONT_REGULAR_CANDIDATES, 14)
     font_header = pick_font(FONT_BOLD_CANDIDATES, 12)
     font_group = pick_font(FONT_BOLD_CANDIDATES, 14)
-    font_badge = pick_font(FONT_BOLD_CANDIDATES, 13)
     font_bold_cell = pick_font(FONT_BOLD_CANDIDATES, 13)
     font_cell = pick_font(FONT_REGULAR_CANDIDATES, 13)
     font_footer = pick_font(FONT_REGULAR_CANDIDATES, 13)
@@ -392,20 +391,24 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
         else:
             row_heights.append(58)
 
+    count_area_h = font_footer.size + 10  # reserved space for the "N รายการ" line at the bottom of each group
+
     if grouped and records:
-        badge_h = font_badge.size + 4 * 2
         run_start, n = 0, len(records)
         for i in range(1, n + 1):
-            if (i == n) or (records[i]["Group"] != records[run_start]["Group"]):
+            if (i == n) or (records[i]["GroupKey"] != records[run_start]["GroupKey"]):
                 run_end = i - 1
-                label_lines = wrap_text(probe, records[run_start]["Group"], font_group, group_width - 16)
-                needed_h = 8 + badge_h + 6 + len(label_lines) * (font_group.size + 4) + 8
+                max_lines = max(
+                    len(wrap_text(probe, part or "-", font_group, g["width"] - 16))
+                    for g, part in zip(group_spec, records[run_start]["GroupParts"])
+                )
+                needed_h = 8 + max_lines * (font_group.size + 4) + 6 + count_area_h + 8
                 shortfall = needed_h - sum(row_heights[run_start:run_end + 1])
                 if shortfall > 0:
                     row_heights[run_end] += shortfall
                 run_start = i
 
-    header_texts = ([(group_label, group_width)] if grouped else []) + [(headers_th[k], w) for k, w in zip(keys, col_ws)]
+    header_texts = ([(g["label"], g["width"]) for g in group_spec] if grouped else []) + [(headers_th[k], w) for k, w in zip(keys, col_ws)]
     max_header_lines = max(len(wrap_text(probe, text, font_header, w - 12)) for text, w in header_texts)
 
     title_area_h = 90
@@ -420,7 +423,6 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     GROUP_BG, ALT_ROW_BG = theme["group_bg"], (250, 251, 255)
     BORDER, OUTER_BORDER = (228, 228, 235), (200, 200, 210)
     EMPTY_RED = (200, 30, 30)
-    BADGE_BG = (214, 69, 40)
 
     img = Image.new("RGB", (canvas_width, canvas_height), "white")
     draw = ImageDraw.Draw(img)
@@ -450,9 +452,10 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
 
     x = table_left
     if grouped:
-        draw.rectangle([x, table_top, x + group_width, table_top + header_h], fill=HEADER_BG, outline=BORDER)
-        wrapped_header_text(x, table_top, group_width, header_h, group_label, font_header, WHITE)
-        x += group_width
+        for g in group_spec:
+            draw.rectangle([x, table_top, x + g["width"], table_top + header_h], fill=HEADER_BG, outline=BORDER)
+            wrapped_header_text(x, table_top, g["width"], header_h, g["label"], font_header, WHITE)
+            x += g["width"]
     for k, w in zip(keys, col_ws):
         draw.rectangle([x, table_top, x + w, table_top + header_h], fill=HEADER_BG, outline=BORDER)
         wrapped_header_text(x, table_top, w, header_h, headers_th[k], font_header, WHITE)
@@ -483,30 +486,26 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
         if grouped:
             run_start, n = 0, len(records)
             for i in range(1, n + 1):
-                boundary = (i == n) or (records[i]["Group"] != records[run_start]["Group"])
+                boundary = (i == n) or (records[i]["GroupKey"] != records[run_start]["GroupKey"])
                 if boundary:
                     run_end = i - 1
                     top_y = row_y_positions[run_start]
                     bottom_y = row_y_positions[run_end] + row_heights[run_end]
                     group_h = bottom_y - top_y
                     count = run_end - run_start + 1
-                    draw.rectangle([table_left, top_y, table_left + group_width, top_y + group_h], fill=GROUP_BG, outline=BORDER)
+                    parts = records[run_start]["GroupParts"]
 
-                    badge_text = f"{count} รายการ"
-                    badge_pad_x, badge_pad_y = 8, 4
-                    badge_tw = draw.textlength(badge_text, font=font_badge)
-                    badge_w = badge_tw + badge_pad_x * 2
-                    badge_h = font_badge.size + badge_pad_y * 2
-                    badge_x, badge_y = table_left + 8, top_y + 8
-                    draw.rounded_rectangle(
-                        [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=badge_h / 2, fill=BADGE_BG,
-                    )
-                    draw.text((badge_x + badge_w / 2, badge_y + badge_h / 2), badge_text, font=font_badge, fill=WHITE, anchor="mm")
+                    gx = table_left
+                    for g, part in zip(group_spec, parts):
+                        draw.rectangle([gx, top_y, gx + g["width"], top_y + group_h], fill=GROUP_BG, outline=BORDER)
+                        ly = top_y + 8
+                        for line in wrap_text(draw, part or "-", font_group, g["width"] - 16):
+                            draw.text((gx + 8, ly), line, font=font_group, fill=DARK)
+                            ly += font_group.size + 4
+                        gx += g["width"]
 
-                    ly = badge_y + badge_h + 6
-                    for line in wrap_text(draw, records[run_start]["Group"], font_group, group_width - 16):
-                        draw.text((table_left + 8, ly), line, font=font_group, fill=DARK)
-                        ly += font_group.size + 4
+                    count_text = f"{count} รายการ"
+                    draw.text((table_left + group_width / 2, bottom_y - 8), count_text, font=font_footer, fill=GRAY, anchor="mb")
                     run_start = i
     else:
         draw.rectangle([table_left, y, table_left + total_col_width, y + empty_row_h], fill=ALT_ROW_BG, outline=BORDER)
@@ -569,10 +568,7 @@ REPORTS = [
         "extra_filter_cols": [STATUS_COL],
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) == STATUS_FILTER_VALUE,
         "filter_desc": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
-        "group_col": NOTIFY_DATE_COL_OP_PDPU,
-        "group_label": "วันแจ้งPOS",
-        "group_width": GROUP_WIDTH_OP_PDPU,
-        "group_date_cols": {NOTIFY_DATE_COL_OP_PDPU},
+        "group_spec": [{"col": NOTIFY_DATE_COL_OP_PDPU, "label": "วันแจ้งPOS", "width": GROUP_WIDTH_OP_PDPU, "is_date": True}],
         "columns": COLUMNS_OP_PDPU,
         "headers": HEADERS_TH_OP_PDPU,
         "col_widths": COL_WIDTHS_OP_PDPU,
@@ -589,9 +585,7 @@ REPORTS = [
         "extra_filter_cols": [FILTER_COL],
         "matches": lambda vals: is_blank(vals.get(FILTER_COL)),
         "filter_desc": "รอคุยในที่ประชุม is blank",
-        "group_col": GROUP_COL,
-        "group_label": "รายการแจ้งเปลี่ยนแปลง",
-        "group_width": GROUP_WIDTH,
+        "group_spec": [{"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False}],
         "columns": COLUMNS,
         "headers": HEADERS_TH,
         "col_widths": COL_WIDTHS,
@@ -615,9 +609,10 @@ REPORTS = [
             "(Status not in {จองคิวผลิตแล้ว, ยกเลิกการเช็คแผนผลิต} OR Order-Shipment blank) "
             f"AND Created > {CREATED_CUTOFF_PQ.isoformat()} (Asia/Bangkok)"
         ),
-        "group_col": (PDPU_COL_PQ, ACCOUNT_COL_PQ),
-        "group_label": "PD/PU / Account Name",
-        "group_width": GROUP_WIDTH_PQ,
+        "group_spec": [
+            {"col": PDPU_COL_PQ, "label": "PD/PU", "width": PDPU_GROUP_WIDTH_PQ, "is_date": False},
+            {"col": ACCOUNT_COL_PQ, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH_PQ, "is_date": False},
+        ],
         "columns": COLUMNS_PQ,
         "headers": HEADERS_TH_PQ,
         "col_widths": COL_WIDTHS_PQ,
@@ -634,9 +629,7 @@ REPORTS = [
         "extra_filter_cols": [],
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) in STATUS_INCLUDE_HOLD,
         "filter_desc": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)}",
-        "group_col": GROUP_COL,
-        "group_label": "รายการแจ้งเปลี่ยนแปลง",
-        "group_width": GROUP_WIDTH,
+        "group_spec": [{"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False}],
         "columns": COLUMNS,
         "headers": HEADERS_TH,
         "col_widths": COL_WIDTHS,
@@ -652,20 +645,20 @@ REPORTS = [
 def main():
     for report in REPORTS:
         print(f"--- {report['title']} (table {report['table_id']}) ---")
-        gc = report["group_col"]
-        group_cols = list(gc) if isinstance(gc, tuple) else ([gc] if gc else [])
+        group_spec = report.get("group_spec")
+        group_cols = [g["col"] for g in group_spec] if group_spec else []
         visible_cols = group_cols + report["extra_filter_cols"] + [c for c, _ in report["columns"]]
         raw_rows = fetch_rows(report["table_id"], visible_cols)
         print(f"Fetched {len(raw_rows)} raw rows from Coda table {report['table_id']}")
         records = build_records(
             raw_rows, report["matches"], report["columns"], report["date_keys"], report["num_keys"],
-            report["group_col"], report["sort_keys"], report.get("group_date_cols", frozenset()),
+            group_spec, report["sort_keys"],
         )
         print(f"{len(records)} rows match filter ({report['filter_desc']})")
         render_image(
             records, report["out_path"], report["title"],
-            report["columns"], report["headers"], report["col_widths"], report["group_width"],
-            report["group_label"], report["wrap_key"], report.get("theme"),
+            report["columns"], report["headers"], report["col_widths"], group_spec,
+            report["wrap_key"], report.get("theme"),
         )
         print(f"Saved image: {report['out_path']}")
         for bot in LARK_BOTS:
