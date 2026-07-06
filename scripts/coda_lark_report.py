@@ -351,6 +351,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     font_subtitle = pick_font(FONT_REGULAR_CANDIDATES, 14)
     font_header = pick_font(FONT_BOLD_CANDIDATES, 12)
     font_group = pick_font(FONT_BOLD_CANDIDATES, 14)
+    font_badge = pick_font(FONT_BOLD_CANDIDATES, 13)
     font_bold_cell = pick_font(FONT_BOLD_CANDIDATES, 13)
     font_cell = pick_font(FONT_REGULAR_CANDIDATES, 13)
     font_footer = pick_font(FONT_REGULAR_CANDIDATES, 13)
@@ -373,6 +374,19 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
         else:
             row_heights.append(58)
 
+    if grouped and records:
+        badge_h = font_badge.size + 4 * 2
+        run_start, n = 0, len(records)
+        for i in range(1, n + 1):
+            if (i == n) or (records[i]["Group"] != records[run_start]["Group"]):
+                run_end = i - 1
+                label_lines = wrap_text(probe, records[run_start]["Group"], font_group, group_width - 16)
+                needed_h = 8 + badge_h + 6 + len(label_lines) * (font_group.size + 4) + 8
+                shortfall = needed_h - sum(row_heights[run_start:run_end + 1])
+                if shortfall > 0:
+                    row_heights[run_end] += shortfall
+                run_start = i
+
     header_texts = ([(group_label, group_width)] if grouped else []) + [(headers_th[k], w) for k, w in zip(keys, col_ws)]
     max_header_lines = max(len(wrap_text(probe, text, font_header, w - 12)) for text, w in header_texts)
 
@@ -388,6 +402,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     GROUP_BG, ALT_ROW_BG = (255, 244, 214), (250, 251, 255)
     BORDER, OUTER_BORDER = (228, 228, 235), (200, 200, 210)
     EMPTY_RED = (200, 30, 30)
+    BADGE_BG = (214, 69, 40)
 
     img = Image.new("RGB", (canvas_width, canvas_height), "white")
     draw = ImageDraw.Draw(img)
@@ -457,10 +472,21 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     bottom_y = row_y_positions[run_end] + row_heights[run_end]
                     group_h = bottom_y - top_y
                     count = run_end - run_start + 1
-                    label = f"{records[run_start]['Group']} ({count})"
                     draw.rectangle([table_left, top_y, table_left + group_width, top_y + group_h], fill=GROUP_BG, outline=BORDER)
-                    ly = top_y + 8
-                    for line in wrap_text(draw, label, font_group, group_width - 16):
+
+                    badge_text = f"{count} รายการ"
+                    badge_pad_x, badge_pad_y = 8, 4
+                    badge_tw = draw.textlength(badge_text, font=font_badge)
+                    badge_w = badge_tw + badge_pad_x * 2
+                    badge_h = font_badge.size + badge_pad_y * 2
+                    badge_x, badge_y = table_left + 8, top_y + 8
+                    draw.rounded_rectangle(
+                        [badge_x, badge_y, badge_x + badge_w, badge_y + badge_h], radius=badge_h / 2, fill=BADGE_BG,
+                    )
+                    draw.text((badge_x + badge_pad_x, badge_y + badge_pad_y), badge_text, font=font_badge, fill=WHITE)
+
+                    ly = badge_y + badge_h + 6
+                    for line in wrap_text(draw, records[run_start]["Group"], font_group, group_width - 16):
                         draw.text((table_left + 8, ly), line, font=font_group, fill=DARK)
                         ly += font_group.size + 4
                     run_start = i
