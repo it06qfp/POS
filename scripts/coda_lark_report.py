@@ -344,6 +344,22 @@ def wrap_text(draw, text, font, max_width):
     return lines or [""]
 
 
+def find_level_runs(records, level):
+    """Runs of consecutive records sharing the same GroupParts[:level+1] prefix.
+
+    Each group_spec column merges independently at its own nesting level: an
+    outer column (e.g. PD/PU) spans every consecutive row with the same value
+    regardless of how the inner column (e.g. Account Name) changes beneath it.
+    """
+    runs = []
+    run_start, n = 0, len(records)
+    for i in range(1, n + 1):
+        if i == n or records[i]["GroupParts"][:level + 1] != records[run_start]["GroupParts"][:level + 1]:
+            runs.append((run_start, i - 1))
+            run_start = i
+    return runs
+
+
 def fit_text_font(draw, text, font, max_width, min_size=9):
     text = str(text)
     if not hasattr(font, "path") or draw.textlength(text, font=font) <= max_width:
@@ -396,19 +412,17 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     count_line_h = font_footer.size + 4
 
     if grouped and records:
-        run_start, n = 0, len(records)
-        for i in range(1, n + 1):
-            if (i == n) or (records[i]["GroupKey"] != records[run_start]["GroupKey"]):
-                run_end = i - 1
-                max_lines = max(
-                    len(wrap_text(probe, part or "-", font_group, g["width"] - 16))
-                    for g, part in zip(group_spec, records[run_start]["GroupParts"])
-                )
-                needed_h = 8 + max_lines * label_line_h + GROUP_BLOCK_GAP + count_line_h + 8
+        extra_by_row = {}
+        for level, g in enumerate(group_spec):
+            for run_start, run_end in find_level_runs(records, level):
+                part = records[run_start]["GroupParts"][level]
+                lines = wrap_text(probe, part or "-", font_group, g["width"] - 16)
+                needed_h = 8 + len(lines) * label_line_h + GROUP_BLOCK_GAP + count_line_h + 8
                 shortfall = needed_h - sum(row_heights[run_start:run_end + 1])
                 if shortfall > 0:
-                    row_heights[run_end] += shortfall
-                run_start = i
+                    extra_by_row[run_end] = max(extra_by_row.get(run_end, 0), shortfall)
+        for row_idx, extra in extra_by_row.items():
+            row_heights[row_idx] += extra
 
     header_texts = ([(g["label"], g["width"]) for g in group_spec] if grouped else []) + [(headers_th[k], w) for k, w in zip(keys, col_ws)]
     max_header_lines = max(len(wrap_text(probe, text, font_header, w - 12)) for text, w in header_texts)
@@ -486,37 +500,40 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
             y += h
 
         if grouped:
-            run_start, n = 0, len(records)
-            for i in range(1, n + 1):
-                boundary = (i == n) or (records[i]["GroupKey"] != records[run_start]["GroupKey"])
-                if boundary:
-                    run_end = i - 1
+            gx_offsets = []
+            gx = table_left
+            for g in group_spec:
+                gx_offsets.append(gx)
+                gx += g["width"]
+
+            for level, g in enumerate(group_spec):
+                gx0 = gx_offsets[level]
+                align = g.get("align", "center")
+                for run_start, run_end in find_level_runs(records, level):
                     top_y = row_y_positions[run_start]
                     bottom_y = row_y_positions[run_end] + row_heights[run_end]
                     group_h = bottom_y - top_y
                     count = run_end - run_start + 1
-                    parts = records[run_start]["GroupParts"]
+                    part = records[run_start]["GroupParts"][level]
 
-                    part_lines = [wrap_text(draw, part or "-", font_group, g["width"] - 16) for g, part in zip(group_spec, parts)]
-                    label_block_h = max(len(lines) for lines in part_lines) * label_line_h
+                    lines = wrap_text(draw, part or "-", font_group, g["width"] - 16)
+                    label_block_h = len(lines) * label_line_h
                     block_h = label_block_h + GROUP_BLOCK_GAP + count_line_h
                     start_y = top_y + (group_h - block_h) / 2
 
-                    gx = table_left
-                    for g, lines in zip(group_spec, part_lines):
-                        draw.rectangle([gx, top_y, gx + g["width"], top_y + group_h], fill=GROUP_BG, outline=BORDER)
-                        ly = start_y
-                        for line in lines:
-                            draw.text((gx + g["width"] / 2, ly), line, font=font_group, fill=DARK, anchor="mt")
-                            ly += label_line_h
-                        gx += g["width"]
+                    draw.rectangle([gx0, top_y, gx0 + g["width"], top_y + group_h], fill=GROUP_BG, outline=BORDER)
+                    text_x = gx0 + 8 if align == "left" else gx0 + g["width"] / 2
+                    text_anchor_h = "l" if align == "left" else "m"
+                    ly = start_y
+                    for line in lines:
+                        draw.text((text_x, ly), line, font=font_group, fill=DARK, anchor=f"{text_anchor_h}t")
+                        ly += label_line_h
 
                     count_text = f"{count} รายการ"
                     draw.text(
-                        (table_left + group_width / 2, start_y + label_block_h + GROUP_BLOCK_GAP),
-                        count_text, font=font_footer, fill=GRAY, anchor="mt",
+                        (text_x, start_y + label_block_h + GROUP_BLOCK_GAP),
+                        count_text, font=font_footer, fill=GRAY, anchor=f"{text_anchor_h}t",
                     )
-                    run_start = i
     else:
         draw.rectangle([table_left, y, table_left + total_col_width, y + empty_row_h], fill=ALT_ROW_BG, outline=BORDER)
         centered_text(table_left, y, total_col_width, empty_row_h, "ไม่มีรายการ", font_cell, EMPTY_RED)
@@ -621,7 +638,7 @@ REPORTS = [
         ),
         "group_spec": [
             {"col": PDPU_COL_PQ, "label": "PD/PU", "width": PDPU_GROUP_WIDTH_PQ, "is_date": False},
-            {"col": ACCOUNT_COL_PQ, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH_PQ, "is_date": False},
+            {"col": ACCOUNT_COL_PQ, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH_PQ, "is_date": False, "align": "left"},
         ],
         "columns": COLUMNS_PQ,
         "headers": HEADERS_TH_PQ,
