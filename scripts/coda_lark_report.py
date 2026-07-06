@@ -336,8 +336,7 @@ def fit_text_font(draw, text, font, max_width, min_size=9):
     return fitted
 
 
-def render_image(records, out_path, title, context_label, table_id,
-                  columns, headers_th, col_widths, group_width, group_label, wrap_key=None):
+def render_image(records, out_path, title, columns, headers_th, col_widths, group_width, group_label, wrap_key=None):
     grouped = bool(group_label) and group_width > 0
     if not grouped:
         group_width = 0
@@ -374,8 +373,9 @@ def render_image(records, out_path, title, context_label, table_id,
     title_area_h = 90
     header_h = max(52, max_header_lines * (font_header.size + 4) + 16)
     footer_area_h = 40
-    total_rows_h = sum(row_heights)
-    canvas_height = title_area_h + header_h + total_rows_h + footer_area_h if records else title_area_h + 40
+    empty_row_h = 60
+    total_rows_h = sum(row_heights) if records else empty_row_h
+    canvas_height = title_area_h + header_h + total_rows_h + footer_area_h
 
     NAVY, GRAY = (30, 41, 90), (110, 110, 120)
     HEADER_BG, WHITE, DARK = (37, 58, 138), (255, 255, 255), (40, 40, 45)
@@ -387,13 +387,8 @@ def render_image(records, out_path, title, context_label, table_id,
 
     draw.text((margin, 15), title, font=font_title, fill=NAVY)
     today_str = datetime.now().strftime("%d/%m/%Y")
-    subtitle = f"{context_label}  |  ตาราง {table_id}  |  ข้อมูล ณ วันที่ {today_str}"
+    subtitle = f"ข้อมูล ณ วันที่ {today_str}"
     draw.text((margin, 50), subtitle, font=font_subtitle, fill=GRAY)
-
-    if not records:
-        draw.text((margin, title_area_h), "ไม่มีรายการ", font=font_footer, fill=GRAY)
-        img.save(out_path)
-        return
 
     table_top, table_left = title_area_h, margin
 
@@ -424,43 +419,47 @@ def render_image(records, out_path, title, context_label, table_id,
         x += w
 
     y = table_top + header_h
-    row_y_positions = []
-    for i, r in enumerate(records):
-        row_y_positions.append(y)
-        h = row_heights[i]
-        bg = ALT_ROW_BG if i % 2 == 0 else WHITE
-        x = table_left + group_width
-        for k, w in zip(keys, col_ws):
-            draw.rectangle([x, y, x + w, y + h], fill=bg, outline=BORDER)
-            font = font_bold_cell if k == "Account" else font_cell
-            if k == wrap_key:
-                lines = wrap_text(draw, r[k], font, w - 16)
-                ly = y + 6
-                for line in lines:
-                    draw.text((x + 8, ly), line, font=font, fill=DARK)
-                    ly += font.size + 6
-            else:
-                centered_text(x, y, w, h, r[k], font, DARK)
-            x += w
-        y += h
+    if records:
+        row_y_positions = []
+        for i, r in enumerate(records):
+            row_y_positions.append(y)
+            h = row_heights[i]
+            bg = ALT_ROW_BG if i % 2 == 0 else WHITE
+            x = table_left + group_width
+            for k, w in zip(keys, col_ws):
+                draw.rectangle([x, y, x + w, y + h], fill=bg, outline=BORDER)
+                font = font_bold_cell if k == "Account" else font_cell
+                if k == wrap_key:
+                    lines = wrap_text(draw, r[k], font, w - 16)
+                    ly = y + 6
+                    for line in lines:
+                        draw.text((x + 8, ly), line, font=font, fill=DARK)
+                        ly += font.size + 6
+                else:
+                    centered_text(x, y, w, h, r[k], font, DARK)
+                x += w
+            y += h
 
-    if grouped:
-        run_start, n = 0, len(records)
-        for i in range(1, n + 1):
-            boundary = (i == n) or (records[i]["Group"] != records[run_start]["Group"])
-            if boundary:
-                run_end = i - 1
-                top_y = row_y_positions[run_start]
-                bottom_y = row_y_positions[run_end] + row_heights[run_end]
-                group_h = bottom_y - top_y
-                count = run_end - run_start + 1
-                label = f"{records[run_start]['Group']} ({count})"
-                draw.rectangle([table_left, top_y, table_left + group_width, top_y + group_h], fill=GROUP_BG, outline=BORDER)
-                ly = top_y + 8
-                for line in wrap_text(draw, label, font_group, group_width - 16):
-                    draw.text((table_left + 8, ly), line, font=font_group, fill=DARK)
-                    ly += font_group.size + 4
-                run_start = i
+        if grouped:
+            run_start, n = 0, len(records)
+            for i in range(1, n + 1):
+                boundary = (i == n) or (records[i]["Group"] != records[run_start]["Group"])
+                if boundary:
+                    run_end = i - 1
+                    top_y = row_y_positions[run_start]
+                    bottom_y = row_y_positions[run_end] + row_heights[run_end]
+                    group_h = bottom_y - top_y
+                    count = run_end - run_start + 1
+                    label = f"{records[run_start]['Group']} ({count})"
+                    draw.rectangle([table_left, top_y, table_left + group_width, top_y + group_h], fill=GROUP_BG, outline=BORDER)
+                    ly = top_y + 8
+                    for line in wrap_text(draw, label, font_group, group_width - 16):
+                        draw.text((table_left + 8, ly), line, font=font_group, fill=DARK)
+                        ly += font_group.size + 4
+                    run_start = i
+    else:
+        draw.rectangle([table_left, y, table_left + total_col_width, y + empty_row_h], fill=ALT_ROW_BG, outline=BORDER)
+        centered_text(table_left, y, total_col_width, empty_row_h, "ไม่มีรายการ", font_cell, GRAY)
 
     draw.rectangle(
         [table_left, table_top, table_left + total_col_width, table_top + header_h + total_rows_h],
@@ -510,7 +509,6 @@ REPORTS = [
     {
         "table_id": TABLE_ID_OP_PDPU,
         "title": "รายการลงผลิตใหม่ รอเลือก PD/PU",
-        "context_label": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
         "extra_filter_cols": [STATUS_COL],
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) == STATUS_FILTER_VALUE,
         "filter_desc": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
@@ -529,7 +527,6 @@ REPORTS = [
     {
         "table_id": TABLE_ID,
         "title": "รายการประชุม POS Daily Day",
-        "context_label": "รอคุยในที่ประชุม (ว่าง)",
         "extra_filter_cols": [FILTER_COL],
         "matches": lambda vals: is_blank(vals.get(FILTER_COL)),
         "filter_desc": "รอคุยในที่ประชุม is blank",
@@ -548,10 +545,6 @@ REPORTS = [
     {
         "table_id": TABLE_ID_PROD_QUEUE,
         "title": "รายการเช็คแผนการผลิตจองคิวผลิต",
-        "context_label": (
-            "(Status ไม่ใช่ จองคิวผลิตแล้ว/ยกเลิกการเช็คแผนผลิต หรือ Order-Shipment ว่าง) "
-            f"และ Created หลัง {CREATED_CUTOFF_PQ.strftime('%d/%m/%Y %H:%M')}"
-        ),
         "extra_filter_cols": [ORDER_SHIPMENT_COL_PQ, CREATED_COL_PQ],
         "matches": lambda vals: (
             extract_value(vals.get(STATUS_COL_PQ)) not in STATUS_EXCLUDE_PQ
@@ -577,7 +570,6 @@ REPORTS = [
     {
         "table_id": TABLE_ID_OP_PDPU,
         "title": "รอแจ้ง/Hold/ยกเลิก",
-        "context_label": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)}",
         "extra_filter_cols": [STATUS_COL],
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) in STATUS_INCLUDE_HOLD,
         "filter_desc": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)}",
@@ -609,7 +601,7 @@ def main():
         )
         print(f"{len(records)} rows match filter ({report['filter_desc']})")
         render_image(
-            records, report["out_path"], report["title"], report["context_label"], report["table_id"],
+            records, report["out_path"], report["title"],
             report["columns"], report["headers"], report["col_widths"], report["group_width"],
             report["group_label"], report["wrap_key"],
         )
