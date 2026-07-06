@@ -72,9 +72,9 @@ HEADERS_TH = {
     "Status": "Status_DO-Shipment",
 }
 COL_WIDTHS = {
-    "Account": 240, "DO": 130, "OrderQty": 95, "ShipQty": 95, "Unit": 50,
-    "PDPU": 55, "MOPR": 110, "ProdCode": 110, "ProdName": 380, "CRD0": 95,
-    "CRDEdit": 100, "LoadConfirm": 95, "ArriveDate": 100, "Status": 150,
+    "Account": 240, "DO": 130, "OrderQty": 95, "ShipQty": 105, "Unit": 50,
+    "PDPU": 65, "MOPR": 110, "ProdCode": 110, "ProdName": 380, "CRD0": 95,
+    "CRDEdit": 100, "LoadConfirm": 95, "ArriveDate": 100, "Status": 160,
 }
 GROUP_WIDTH = 200
 
@@ -221,8 +221,11 @@ def render_image(records, out_path):
         line_h = font_cell.size + 6
         row_heights.append(max(58, len(lines) * line_h + 28))
 
+    header_texts = [("รายการแจ้งเปลี่ยนแปลง", GROUP_WIDTH)] + [(HEADERS_TH[k], w) for k, w in zip(keys, col_widths)]
+    max_header_lines = max(len(wrap_text(probe, text, font_header, w - 12)) for text, w in header_texts)
+
     title_area_h = 90
-    header_h = 52
+    header_h = max(52, max_header_lines * (font_header.size + 4) + 16)
     footer_area_h = 40
     total_rows_h = sum(row_heights)
     canvas_height = title_area_h + header_h + total_rows_h + footer_area_h if records else title_area_h + 40
@@ -251,13 +254,21 @@ def render_image(records, out_path):
         tw = draw.textlength(str(text), font=font)
         draw.text((x + max(6, (w - tw) / 2), y + h / 2 - font.size / 2), str(text), font=font, fill=fill)
 
+    def wrapped_header_text(x, y, w, h, text, font, fill):
+        lines = wrap_text(draw, text, font, w - 12)
+        line_h = font.size + 4
+        start_y = y + h / 2 - (len(lines) * line_h) / 2
+        for j, line in enumerate(lines):
+            tw = draw.textlength(line, font=font)
+            draw.text((x + max(6, (w - tw) / 2), start_y + j * line_h), line, font=font, fill=fill)
+
     x = table_left
     draw.rectangle([x, table_top, x + GROUP_WIDTH, table_top + header_h], fill=HEADER_BG, outline=BORDER)
-    centered_text(x, table_top, GROUP_WIDTH, header_h, "รายการแจ้งเปลี่ยนแปลง", font_header, WHITE)
+    wrapped_header_text(x, table_top, GROUP_WIDTH, header_h, "รายการแจ้งเปลี่ยนแปลง", font_header, WHITE)
     x += GROUP_WIDTH
     for k, w in zip(keys, col_widths):
         draw.rectangle([x, table_top, x + w, table_top + header_h], fill=HEADER_BG, outline=BORDER)
-        centered_text(x, table_top, w, header_h, HEADERS_TH[k], font_header, WHITE)
+        wrapped_header_text(x, table_top, w, header_h, HEADERS_TH[k], font_header, WHITE)
         x += w
 
     y = table_top + header_h
