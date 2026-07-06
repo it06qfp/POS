@@ -387,6 +387,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     HEADER_BG, WHITE, DARK = (37, 58, 138), (255, 255, 255), (40, 40, 45)
     GROUP_BG, ALT_ROW_BG = (255, 244, 214), (250, 251, 255)
     BORDER, OUTER_BORDER = (228, 228, 235), (200, 200, 210)
+    EMPTY_RED = (200, 30, 30)
 
     img = Image.new("RGB", (canvas_width, canvas_height), "white")
     draw = ImageDraw.Draw(img)
@@ -465,7 +466,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     run_start = i
     else:
         draw.rectangle([table_left, y, table_left + total_col_width, y + empty_row_h], fill=ALT_ROW_BG, outline=BORDER)
-        centered_text(table_left, y, total_col_width, empty_row_h, "ไม่มีรายการ", font_cell, GRAY)
+        centered_text(table_left, y, total_col_width, empty_row_h, "ไม่มีรายการ", font_cell, EMPTY_RED)
 
     draw.rectangle(
         [table_left, table_top, table_left + total_col_width, table_top + header_h + total_rows_h],
