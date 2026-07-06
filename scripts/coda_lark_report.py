@@ -2,11 +2,18 @@
 """
 POS Daily Lark report.
 
-Pulls rows from two Coda tables -- (1) the meeting table filtered to rows
-where "รอคุยในที่ประชุม" is blank, and (2) the master DO-Shipment table
-filtered to rows where Status_DO-Shipment = "OP เลือก PD/PU" -- renders a
-grouped table image per report (merged group cells, wrapped product names),
-and posts each image to a Lark group via incoming webhook.
+Pulls rows from three Coda tables, each filtered to a different subset of
+in-progress work, renders a grouped table image per report (merged group
+cells, wrapped product names), and posts each image to a Lark group via
+incoming webhook:
+
+  1. Meeting table (table-OA56XddNFI) filtered to rows where
+     "รอคุยในที่ประชุม" is blank.
+  2. Master DO-Shipment table (table-1mLj_7ktbc) filtered to rows where
+     Status_DO-Shipment = "OP เลือก PD/PU".
+  3. Production-queue table (grid-z9ENI7PaD5) filtered to rows where
+     Status is not "จองคิวผลิตแล้ว"/"ยกเลิกการเช็คแผนผลิต" OR
+     Order-Shipment is blank.
 
 Required environment variables (set as GitHub Actions secrets):
   CODA_API_TOKEN     Coda API token (coda.io -> Account Settings -> API Settings)
@@ -15,9 +22,10 @@ Required environment variables (set as GitHub Actions secrets):
   LARK_WEBHOOK_URL   Full Lark incoming-webhook URL
 
 Optional:
-  CODA_DOC_ID           default "MiXbfRif1m"
-  CODA_TABLE_ID         default "table-OA56XddNFI" (meeting report)
-  CODA_TABLE_ID_OP_PDPU default "table-1mLj_7ktbc" (OP เลือก PD/PU report)
+  CODA_DOC_ID              default "MiXbfRif1m"
+  CODA_TABLE_ID            default "table-OA56XddNFI"     (meeting report)
+  CODA_TABLE_ID_OP_PDPU    default "table-1mLj_7ktbc"     (OP เลือก PD/PU report)
+  CODA_TABLE_ID_PROD_QUEUE default "grid-z9ENI7PaD5"      (production-queue report)
 """
 import json
 import os
@@ -36,12 +44,14 @@ LARK_WEBHOOK_URL = os.environ["LARK_WEBHOOK_URL"]
 DOC_ID = os.environ.get("CODA_DOC_ID", "MiXbfRif1m")
 TABLE_ID = os.environ.get("CODA_TABLE_ID", "table-OA56XddNFI")
 TABLE_ID_OP_PDPU = os.environ.get("CODA_TABLE_ID_OP_PDPU", "table-1mLj_7ktbc")
+TABLE_ID_PROD_QUEUE = os.environ.get("CODA_TABLE_ID_PROD_QUEUE", "grid-z9ENI7PaD5")
 
 FILTER_COL = "c-i7ekT7SOM_"  # รอคุยในที่ประชุม -- must be blank to include the row
 STATUS_COL = "c-HvRU96fdFo"  # Status_DO-Shipment
 STATUS_FILTER_VALUE = "OP เลือก PD/PU"
 GROUP_COL = "c-jF5iOvd80f"  # รายการแจ้งเปลี่ยนแปลง -- merged group column
 
+# --- report 1 & 2 shared schema (DO-Shipment style tables) ---
 COLUMNS = [
     ("c-zk747feqUX", "Account"),
     ("c-lCcIWuw_5l", "DO"),
@@ -83,6 +93,46 @@ COL_WIDTHS = {
     "CRDEdit": 100, "LoadConfirm": 95, "ArriveDate": 100, "Status": 160,
 }
 GROUP_WIDTH = 200
+SORT_KEYS = ["DO", "Account"]
+
+# --- report 3 schema (production-queue table) ---
+STATUS_COL_PQ = "c-B0Rs5QyYq3"  # Status -- also used as the group column
+ORDER_SHIPMENT_COL_PQ = "c-IrtKcErAtQ"
+STATUS_EXCLUDE_PQ = {"จองคิวผลิตแล้ว", "ยกเลิกการเช็คแผนผลิต"}
+
+COLUMNS_PQ = [
+    ("c-zZsm603C_I", "Account"),
+    ("c-IrtKcErAtQ", "OrderShipment"),
+    ("c-hJnPkumoJi", "ProdCode"),
+    ("c-cjNDgE7Usl", "ProdName"),
+    ("c-jMBvRwlGzR", "Qty"),
+    ("c-TG-qapwpxJ", "Unit"),
+    ("c-7PpTcmbFqx", "CRD"),
+    ("c-e3K7rOgynm", "PDPU"),
+    ("c-KYT8U1bMj2", "SONo"),
+    ("c-Z9q0Avg2Qe", "NotePDPU"),
+]
+DATE_KEYS_PQ = {"CRD"}
+NUM_KEYS_PQ = {"Qty"}
+
+HEADERS_TH_PQ = {
+    "Account": "Account Name",
+    "OrderShipment": "Order-Shipment",
+    "ProdCode": "Product Code",
+    "ProdName": "Product Name",
+    "Qty": "Qty",
+    "Unit": "Unit",
+    "CRD": "CRD",
+    "PDPU": "PD/PU",
+    "SONo": "SO No.",
+    "NotePDPU": "Note PD/PU",
+}
+COL_WIDTHS_PQ = {
+    "Account": 220, "OrderShipment": 140, "ProdCode": 110, "ProdName": 340,
+    "Qty": 90, "Unit": 55, "CRD": 95, "PDPU": 65, "SONo": 120, "NotePDPU": 180,
+}
+GROUP_WIDTH_PQ = 220
+SORT_KEYS_PQ = ["OrderShipment", "Account"]
 
 FONT_REGULAR_CANDIDATES = [
     "/usr/share/fonts/truetype/tlwg/Waree.ttf",
@@ -136,10 +186,9 @@ def fmt_num(raw):
         return str(v) if v else "-"
 
 
-def fetch_rows(table_id, filter_col):
+def fetch_rows(table_id, visible_cols):
     base = f"https://coda.io/apis/v1/docs/{DOC_ID}/tables/{table_id}/rows"
     headers = {"Authorization": f"Bearer {CODA_API_TOKEN}"}
-    visible_cols = [filter_col, GROUP_COL] + [c for c, _ in COLUMNS]
     base_params = {"valueFormat": "simple", "limit": 500, "visibleColumns": ",".join(visible_cols)}
 
     rows = []
@@ -157,25 +206,25 @@ def fetch_rows(table_id, filter_col):
     return rows
 
 
-def build_records(raw_rows, filter_col, matches):
+def build_records(raw_rows, matches, columns, date_keys, num_keys, group_col, sort_keys):
     records = []
     for row in raw_rows:
         vals = row.get("values", {})
-        if not matches(vals.get(filter_col)):
+        if not matches(vals):
             continue
-        rec = {"Group": extract_value(vals.get(GROUP_COL)) or "(ไม่ระบุ)"}
-        for col_id, key in COLUMNS:
+        rec = {"Group": extract_value(vals.get(group_col)) or "(ไม่ระบุ)"}
+        for col_id, key in columns:
             raw = vals.get(col_id)
-            if key in DATE_KEYS:
+            if key in date_keys:
                 rec[key] = fmt_date(raw)
-            elif key in NUM_KEYS:
+            elif key in num_keys:
                 rec[key] = fmt_num(raw)
             else:
                 v = extract_value(raw)
                 rec[key] = str(v) if v not in (None, "") else "-"
         records.append(rec)
 
-    records.sort(key=lambda r: (r["Group"], r["DO"], r["Account"]))
+    records.sort(key=lambda r: tuple([r["Group"]] + [r[k] for k in sort_keys]))
     return records
 
 
@@ -215,7 +264,8 @@ def fit_text_font(draw, text, font, max_width, min_size=9):
     return fitted
 
 
-def render_image(records, out_path, title, context_label, table_id):
+def render_image(records, out_path, title, context_label, table_id,
+                  columns, headers_th, col_widths, group_width, group_label, wrap_key=None):
     font_title = pick_font(FONT_BOLD_CANDIDATES, 24)
     font_subtitle = pick_font(FONT_REGULAR_CANDIDATES, 14)
     font_header = pick_font(FONT_BOLD_CANDIDATES, 12)
@@ -224,22 +274,25 @@ def render_image(records, out_path, title, context_label, table_id):
     font_cell = pick_font(FONT_REGULAR_CANDIDATES, 13)
     font_footer = pick_font(FONT_REGULAR_CANDIDATES, 13)
 
-    keys = [k for _, k in COLUMNS]
-    col_widths = [COL_WIDTHS[k] for k in keys]
-    total_col_width = GROUP_WIDTH + sum(col_widths)
+    keys = [k for _, k in columns]
+    col_ws = [col_widths[k] for k in keys]
+    total_col_width = group_width + sum(col_ws)
     margin = 30
     canvas_width = total_col_width + margin * 2
 
     probe = ImageDraw.Draw(Image.new("RGB", (10, 10)))
 
-    prod_width = COL_WIDTHS["ProdName"] - 16
+    wrap_width = col_widths[wrap_key] - 16 if wrap_key else None
     row_heights = []
     for r in records:
-        lines = wrap_text(probe, r["ProdName"], font_cell, prod_width)
-        line_h = font_cell.size + 6
-        row_heights.append(max(58, len(lines) * line_h + 28))
+        if wrap_key:
+            lines = wrap_text(probe, r[wrap_key], font_cell, wrap_width)
+            line_h = font_cell.size + 6
+            row_heights.append(max(58, len(lines) * line_h + 28))
+        else:
+            row_heights.append(58)
 
-    header_texts = [("รายการแจ้งเปลี่ยนแปลง", GROUP_WIDTH)] + [(HEADERS_TH[k], w) for k, w in zip(keys, col_widths)]
+    header_texts = [(group_label, group_width)] + [(headers_th[k], w) for k, w in zip(keys, col_ws)]
     max_header_lines = max(len(wrap_text(probe, text, font_header, w - 12)) for text, w in header_texts)
 
     title_area_h = 90
@@ -285,12 +338,12 @@ def render_image(records, out_path, title, context_label, table_id):
             draw.text((x + max(6, (w - tw) / 2), start_y + j * line_h), line, font=line_font, fill=fill)
 
     x = table_left
-    draw.rectangle([x, table_top, x + GROUP_WIDTH, table_top + header_h], fill=HEADER_BG, outline=BORDER)
-    wrapped_header_text(x, table_top, GROUP_WIDTH, header_h, "รายการแจ้งเปลี่ยนแปลง", font_header, WHITE)
-    x += GROUP_WIDTH
-    for k, w in zip(keys, col_widths):
+    draw.rectangle([x, table_top, x + group_width, table_top + header_h], fill=HEADER_BG, outline=BORDER)
+    wrapped_header_text(x, table_top, group_width, header_h, group_label, font_header, WHITE)
+    x += group_width
+    for k, w in zip(keys, col_ws):
         draw.rectangle([x, table_top, x + w, table_top + header_h], fill=HEADER_BG, outline=BORDER)
-        wrapped_header_text(x, table_top, w, header_h, HEADERS_TH[k], font_header, WHITE)
+        wrapped_header_text(x, table_top, w, header_h, headers_th[k], font_header, WHITE)
         x += w
 
     y = table_top + header_h
@@ -299,11 +352,11 @@ def render_image(records, out_path, title, context_label, table_id):
         row_y_positions.append(y)
         h = row_heights[i]
         bg = ALT_ROW_BG if i % 2 == 0 else WHITE
-        x = table_left + GROUP_WIDTH
-        for k, w in zip(keys, col_widths):
+        x = table_left + group_width
+        for k, w in zip(keys, col_ws):
             draw.rectangle([x, y, x + w, y + h], fill=bg, outline=BORDER)
             font = font_bold_cell if k == "Account" else font_cell
-            if k == "ProdName":
+            if k == wrap_key:
                 lines = wrap_text(draw, r[k], font, w - 16)
                 ly = y + 6
                 for line in lines:
@@ -324,9 +377,9 @@ def render_image(records, out_path, title, context_label, table_id):
             group_h = bottom_y - top_y
             count = run_end - run_start + 1
             label = f"{records[run_start]['Group']} ({count})"
-            draw.rectangle([table_left, top_y, table_left + GROUP_WIDTH, top_y + group_h], fill=GROUP_BG, outline=BORDER)
+            draw.rectangle([table_left, top_y, table_left + group_width, top_y + group_h], fill=GROUP_BG, outline=BORDER)
             ly = top_y + 8
-            for line in wrap_text(draw, label, font_group, GROUP_WIDTH - 16):
+            for line in wrap_text(draw, label, font_group, group_width - 16):
                 draw.text((table_left + 8, ly), line, font=font_group, fill=DARK)
                 ly += font_group.size + 4
             run_start = i
@@ -380,19 +433,61 @@ REPORTS = [
         "table_id": TABLE_ID,
         "title": "รายการประชุม POS Daily Day",
         "context_label": "รอคุยในที่ประชุม (ว่าง)",
-        "filter_col": FILTER_COL,
-        "matches": is_blank,
+        "extra_filter_cols": [FILTER_COL],
+        "matches": lambda vals: is_blank(vals.get(FILTER_COL)),
         "filter_desc": "รอคุยในที่ประชุม is blank",
+        "group_col": GROUP_COL,
+        "group_label": "รายการแจ้งเปลี่ยนแปลง",
+        "group_width": GROUP_WIDTH,
+        "columns": COLUMNS,
+        "headers": HEADERS_TH,
+        "col_widths": COL_WIDTHS,
+        "date_keys": DATE_KEYS,
+        "num_keys": NUM_KEYS,
+        "sort_keys": SORT_KEYS,
+        "wrap_key": "ProdName",
         "out_path": "pos_daily_grouped.png",
     },
     {
         "table_id": TABLE_ID_OP_PDPU,
         "title": "รายการรอ OP เลือก PD/PU",
         "context_label": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
-        "filter_col": STATUS_COL,
-        "matches": lambda raw: extract_value(raw) == STATUS_FILTER_VALUE,
+        "extra_filter_cols": [],
+        "matches": lambda vals: extract_value(vals.get(STATUS_COL)) == STATUS_FILTER_VALUE,
         "filter_desc": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
+        "group_col": GROUP_COL,
+        "group_label": "รายการแจ้งเปลี่ยนแปลง",
+        "group_width": GROUP_WIDTH,
+        "columns": COLUMNS,
+        "headers": HEADERS_TH,
+        "col_widths": COL_WIDTHS,
+        "date_keys": DATE_KEYS,
+        "num_keys": NUM_KEYS,
+        "sort_keys": SORT_KEYS,
+        "wrap_key": "ProdName",
         "out_path": "pos_op_pdpu_grouped.png",
+    },
+    {
+        "table_id": TABLE_ID_PROD_QUEUE,
+        "title": "รายการจองคิวผลิต/เช็คแผนผลิต",
+        "context_label": "Status ไม่ใช่ จองคิวผลิตแล้ว/ยกเลิกการเช็คแผนผลิต หรือ Order-Shipment ว่าง",
+        "extra_filter_cols": [],
+        "matches": lambda vals: (
+            extract_value(vals.get(STATUS_COL_PQ)) not in STATUS_EXCLUDE_PQ
+            or is_blank(vals.get(ORDER_SHIPMENT_COL_PQ))
+        ),
+        "filter_desc": "Status not in {จองคิวผลิตแล้ว, ยกเลิกการเช็คแผนผลิต} OR Order-Shipment blank",
+        "group_col": STATUS_COL_PQ,
+        "group_label": "Status",
+        "group_width": GROUP_WIDTH_PQ,
+        "columns": COLUMNS_PQ,
+        "headers": HEADERS_TH_PQ,
+        "col_widths": COL_WIDTHS_PQ,
+        "date_keys": DATE_KEYS_PQ,
+        "num_keys": NUM_KEYS_PQ,
+        "sort_keys": SORT_KEYS_PQ,
+        "wrap_key": "ProdName",
+        "out_path": "pos_prod_queue_grouped.png",
     },
 ]
 
@@ -400,11 +495,19 @@ REPORTS = [
 def main():
     for report in REPORTS:
         print(f"--- {report['title']} (table {report['table_id']}) ---")
-        raw_rows = fetch_rows(report["table_id"], report["filter_col"])
+        visible_cols = [report["group_col"]] + report["extra_filter_cols"] + [c for c, _ in report["columns"]]
+        raw_rows = fetch_rows(report["table_id"], visible_cols)
         print(f"Fetched {len(raw_rows)} raw rows from Coda table {report['table_id']}")
-        records = build_records(raw_rows, report["filter_col"], report["matches"])
+        records = build_records(
+            raw_rows, report["matches"], report["columns"], report["date_keys"], report["num_keys"],
+            report["group_col"], report["sort_keys"],
+        )
         print(f"{len(records)} rows match filter ({report['filter_desc']})")
-        render_image(records, report["out_path"], report["title"], report["context_label"], report["table_id"])
+        render_image(
+            records, report["out_path"], report["title"], report["context_label"], report["table_id"],
+            report["columns"], report["headers"], report["col_widths"], report["group_width"],
+            report["group_label"], report["wrap_key"],
+        )
         print(f"Saved image: {report['out_path']}")
         send_to_lark(report["out_path"])
 
