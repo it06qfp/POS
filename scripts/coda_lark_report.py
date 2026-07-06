@@ -342,7 +342,12 @@ def fit_text_font(draw, text, font, max_width, min_size=9):
     return fitted
 
 
-def render_image(records, out_path, title, columns, headers_th, col_widths, group_width, group_label, wrap_key=None):
+DEFAULT_THEME = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (255, 244, 214)}
+
+
+def render_image(records, out_path, title, columns, headers_th, col_widths, group_width, group_label,
+                  wrap_key=None, theme=None):
+    theme = {**DEFAULT_THEME, **(theme or {})}
     grouped = bool(group_label) and group_width > 0
     if not grouped:
         group_width = 0
@@ -397,9 +402,9 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     total_rows_h = sum(row_heights) if records else empty_row_h
     canvas_height = title_area_h + header_h + total_rows_h + footer_area_h
 
-    NAVY, GRAY = (30, 41, 90), (110, 110, 120)
-    HEADER_BG, WHITE, DARK = (37, 58, 138), (255, 255, 255), (40, 40, 45)
-    GROUP_BG, ALT_ROW_BG = (255, 244, 214), (250, 251, 255)
+    NAVY, GRAY = theme["navy"], (110, 110, 120)
+    HEADER_BG, WHITE, DARK = theme["header_bg"], (255, 255, 255), (40, 40, 45)
+    GROUP_BG, ALT_ROW_BG = theme["group_bg"], (250, 251, 255)
     BORDER, OUTER_BORDER = (228, 228, 235), (200, 200, 210)
     EMPTY_RED = (200, 30, 30)
     BADGE_BG = (214, 69, 40)
@@ -538,10 +543,16 @@ def send_to_lark(image_path):
         sys.exit(1)
 
 
+THEME_TEAL = {"navy": (13, 105, 100), "header_bg": (15, 118, 112), "group_bg": (214, 245, 241)}
+THEME_NAVY = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (255, 244, 214)}
+THEME_PURPLE = {"navy": (76, 29, 149), "header_bg": (91, 33, 182), "group_bg": (237, 233, 254)}
+THEME_MAROON = {"navy": (127, 29, 29), "header_bg": (153, 27, 27), "group_bg": (254, 226, 226)}
+
 REPORTS = [
     {
         "table_id": TABLE_ID_OP_PDPU,
         "title": "รายการลงผลิตใหม่ รอเลือก PD/PU",
+        "theme": THEME_TEAL,
         "extra_filter_cols": [STATUS_COL],
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) == STATUS_FILTER_VALUE,
         "filter_desc": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
@@ -561,6 +572,7 @@ REPORTS = [
     {
         "table_id": TABLE_ID,
         "title": "รายการประชุม POS Daily Day",
+        "theme": THEME_NAVY,
         "extra_filter_cols": [FILTER_COL],
         "matches": lambda vals: is_blank(vals.get(FILTER_COL)),
         "filter_desc": "รอคุยในที่ประชุม is blank",
@@ -579,6 +591,7 @@ REPORTS = [
     {
         "table_id": TABLE_ID_PROD_QUEUE,
         "title": "รายการเช็คแผนการผลิตจองคิวผลิต",
+        "theme": THEME_PURPLE,
         "extra_filter_cols": [ORDER_SHIPMENT_COL_PQ, CREATED_COL_PQ],
         "matches": lambda vals: (
             extract_value(vals.get(STATUS_COL_PQ)) not in STATUS_EXCLUDE_PQ
@@ -604,6 +617,7 @@ REPORTS = [
     {
         "table_id": TABLE_ID_OP_PDPU,
         "title": "รอแจ้ง/Hold/ยกเลิก",
+        "theme": THEME_MAROON,
         "extra_filter_cols": [],
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) in STATUS_INCLUDE_HOLD,
         "filter_desc": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)}",
@@ -638,7 +652,7 @@ def main():
         render_image(
             records, report["out_path"], report["title"],
             report["columns"], report["headers"], report["col_widths"], report["group_width"],
-            report["group_label"], report["wrap_key"],
+            report["group_label"], report["wrap_key"], report.get("theme"),
         )
         print(f"Saved image: {report['out_path']}")
         send_to_lark(report["out_path"])
