@@ -20,7 +20,7 @@ incoming webhook, in this order:
      AND Created is after 10:00 Asia/Bangkok yesterday.
   4. รอแจ้ง/Hold/ยกเลิก -- same table as report 1, same columns/grouping
      as report 2, filtered to rows where Status_DO-Shipment is
-     "ยกเลิก", "Hold", or "รอแจ้ง".
+     "ยกเลิก", "Hold", or "รอแจ้ง" AND "รอคุยในที่ประชุม" is blank.
 
 Required environment variables (set as GitHub Actions secrets):
   CODA_API_TOKEN     Coda API token (coda.io -> Account Settings -> API Settings)
@@ -697,9 +697,11 @@ REPORTS = [
         "table_id": TABLE_ID_OP_PDPU,
         "title": "รอแจ้ง/Hold/ยกเลิก",
         "theme": THEME_MAROON,
-        "extra_filter_cols": [],
-        "matches": lambda vals: extract_value(vals.get(STATUS_COL)) in STATUS_INCLUDE_HOLD,
-        "filter_desc": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)}",
+        "extra_filter_cols": [FILTER_COL],
+        "matches": lambda vals: (
+            extract_value(vals.get(STATUS_COL)) in STATUS_INCLUDE_HOLD and is_blank(vals.get(FILTER_COL))
+        ),
+        "filter_desc": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)} AND รอคุยในที่ประชุม is blank",
         "group_spec": [{"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False, "align": "left"}],
         "columns": COLUMNS,
         "headers": HEADERS_TH,
