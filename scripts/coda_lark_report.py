@@ -18,8 +18,9 @@ incoming webhook, in this order:
      (grid-z9ENI7PaD5) filtered to rows where (Status is not
      "จองคิวผลิตแล้ว"/"ยกเลิกการเช็คแผนผลิต" OR Order-Shipment is blank)
      AND Created is after 10:00 Asia/Bangkok yesterday.
-  4. รอแจ้ง/Hold/ยกเลิก -- same table and columns as report 1, filtered
-     to rows where Status_DO-Shipment is "ยกเลิก", "Hold", or "รอแจ้ง".
+  4. รอแจ้ง/Hold/ยกเลิก -- same table as report 1, same columns/grouping
+     as report 2, filtered to rows where Status_DO-Shipment is
+     "ยกเลิก", "Hold", or "รอแจ้ง".
 
 Required environment variables (set as GitHub Actions secrets):
   CODA_API_TOKEN     Coda API token (coda.io -> Account Settings -> API Settings)
