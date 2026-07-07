@@ -8,7 +8,9 @@ cells, wrapped product names), and posts each image to a Lark group via
 incoming webhook, in this order:
 
   1. รายการลงผลิตใหม่ รอเลือก PD/PU -- master DO-Shipment table
-     (table-1mLj_7ktbc) filtered to rows where
+     (grid-lV1uGeGQl2, the base table -- NOT the "table-1mLj_7ktbc" view,
+     which has its own built-in filter that the API honors and would
+     silently starve this report of rows) filtered to rows where
      Status_DO-Shipment = "OP เลือก PD/PU".
   2. รายการประชุม POS Daily Day (รายการแจ้งเปลี่ยนแปลง) -- meeting table
      (table-OA56XddNFI) filtered to rows where "รอคุยในที่ประชุม" is blank.
@@ -28,7 +30,7 @@ Required environment variables (set as GitHub Actions secrets):
 Optional:
   CODA_DOC_ID              default "MiXbfRif1m"
   CODA_TABLE_ID            default "table-OA56XddNFI"     (meeting report)
-  CODA_TABLE_ID_OP_PDPU    default "table-1mLj_7ktbc"     (OP เลือก PD/PU report)
+  CODA_TABLE_ID_OP_PDPU    default "grid-lV1uGeGQl2"      (OP เลือก PD/PU report -- base table, not a filtered view)
   CODA_TABLE_ID_PROD_QUEUE default "grid-z9ENI7PaD5"      (production-queue report)
 
   LARK_APP_ID_2, LARK_APP_SECRET_2, LARK_WEBHOOK_URL_2
@@ -60,7 +62,7 @@ if _LARK_APP_ID_2 and _LARK_APP_SECRET_2 and _LARK_WEBHOOK_URL_2:
 
 DOC_ID = os.environ.get("CODA_DOC_ID", "MiXbfRif1m")
 TABLE_ID = os.environ.get("CODA_TABLE_ID", "table-OA56XddNFI")
-TABLE_ID_OP_PDPU = os.environ.get("CODA_TABLE_ID_OP_PDPU", "table-1mLj_7ktbc")
+TABLE_ID_OP_PDPU = os.environ.get("CODA_TABLE_ID_OP_PDPU", "grid-lV1uGeGQl2")
 TABLE_ID_PROD_QUEUE = os.environ.get("CODA_TABLE_ID_PROD_QUEUE", "grid-z9ENI7PaD5")
 
 FILTER_COL = "c-i7ekT7SOM_"  # รอคุยในที่ประชุม -- must be blank to include the row
