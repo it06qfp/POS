@@ -767,11 +767,8 @@ cells, wrapped product names), and posts each image to a Lark group via
 incoming webhook, in this order:
 
   1. รายการลงผลิตใหม่ รอเลือก PD/PU -- master DO-Shipment table
-     (grid-lV1uGeGQl2, the base table -- NOT the "table-1mLj_7ktbc" view,
-     which has its own built-in filter that the API honors and would
-     silently starve this report of rows) filtered to rows where
-     Status_DO-Shipment = "OP เลือก PD/PU".
-  2. รายการประชุม POS Daily Day (รายการแจ้งเปลี่ยนแปลง) -- meeting table
+     (grid-lV1uGeGQl2) filtered to rows where Status_DO-Shipment = "OP เลือก PD/PU".
+  2. รายการประชุม POS Daily Day -- meeting table
      (table-OA56XddNFI) filtered to rows where "รอคุยในที่ประชุม" is blank.
   3. รายการเช็คแผนการผลิตจองคิวผลิต -- production-queue table
      (grid-z9ENI7PaD5) filtered to rows where (Status is not
@@ -780,22 +777,6 @@ incoming webhook, in this order:
   4. รอแจ้ง/Hold/ยกเลิก -- same table as report 1, same columns/grouping
      as report 2, filtered to rows where Status_DO-Shipment is
      "ยกเลิก", "Hold", or "รอแจ้ง" AND "รอคุยในที่ประชุม" is blank.
-
-Required environment variables (set as GitHub Actions secrets):
-  CODA_API_TOKEN     Coda API token (coda.io -> Account Settings -> API Settings)
-  LARK_APP_ID        Lark custom app id
-  LARK_APP_SECRET    Lark custom app secret
-  LARK_WEBHOOK_URL   Full Lark incoming-webhook URL
-
-Optional:
-  CODA_DOC_ID              default "MiXbfRif1m"
-  CODA_TABLE_ID            default "table-OA56XddNFI"     (meeting report)
-  CODA_TABLE_ID_OP_PDPU    default "grid-lV1uGeGQl2"      (OP เลือก PD/PU report -- base table, not a filtered view)
-  CODA_TABLE_ID_PROD_QUEUE default "grid-z9ENI7PaD5"      (production-queue report)
-
-  LARK_APP_ID_2, LARK_APP_SECRET_2, LARK_WEBHOOK_URL_2
-      Credentials for a second Lark bot/group. If all three are set, every
-      report image is also posted there in addition to the primary bot.
 """
 import json
 import os
@@ -831,7 +812,7 @@ STATUS_FILTER_VALUE = "OP เลือก PD/PU"
 STATUS_INCLUDE_HOLD = {"ยกเลิก", "Hold", "รอแจ้ง"}
 GROUP_COL = "c-jF5iOvd80f"  # รายการแจ้งเปลี่ยนแปลง -- merged group column
 
-# --- report 1 schema (meeting table) ---
+# --- report 1 & 4 schema (meeting table / hold-cancel) ---
 COLUMNS = [
     ("c-zk747feqUX", "Account"),
     ("c-lCcIWuw_5l", "DO"),
@@ -875,12 +856,15 @@ COL_WIDTHS = {
 GROUP_WIDTH = 200
 SORT_KEYS = ["DO", "Account"]
 
+# ลำดับการเรียงสำหรับคอลัมน์ "รายการแจ้งเปลี่ยนแปลง" (SM, PD, PU, OP)
+GROUP_SORT_ORDER = {"SM": 1, "PD": 2, "PU": 3, "OP": 4}
+
 # --- report 1 schema (OP เลือก PD/PU, grouped by วันแจ้งPOS) ---
 NOTIFY_DATE_COL_OP_PDPU = "c-n3S3kQntLR"  # วันแจ้งPOS -- group column
 
+# ลบ PD/PU Main ออก, เพิ่ม ผลการเสนอราคา และ ข้อมูลเพิ่มเติม (หมายเหตุ: ใช้รหัส ID สมมติ สามารถปรับเปลี่ยนได้หาก ID ใน Coda ต่างจากนี้)
 COLUMNS_OP_PDPU = [
     ("c-lCcIWuw_5l", "DO"),
-    ("c-q7-C1QWCWh", "PDPUMain"),
     ("c-qKzCANG9Mi", "AccountCode"),
     ("c-zk747feqUX", "Account"),
     ("c-hCqU5uBXTm", "ProdCode"),
@@ -888,13 +872,14 @@ COLUMNS_OP_PDPU = [
     ("c-PVu77YUoUi", "ShipQty"),
     ("c-UYhihPAYaK", "Unit"),
     ("c-5h8f1Bhotx", "CRD"),
+    ("c-eR3jL1F8_B", "PriceResult"),  # ผลการเสนอราคา (ID สมมติ)
+    ("c-vHkR4_zX9i", "MoreInfo"),     # ข้อมูลเพิ่มเติม (ID สมมติ)
 ]
 DATE_KEYS_OP_PDPU = {"CRD"}
 NUM_KEYS_OP_PDPU = {"ShipQty"}
 
 HEADERS_TH_OP_PDPU = {
     "DO": "DO-shipment",
-    "PDPUMain": "PD/PU Main",
     "AccountCode": "Account Code",
     "Account": "Account Name",
     "ProdCode": "Product Code",
@@ -902,10 +887,13 @@ HEADERS_TH_OP_PDPU = {
     "ShipQty": "Shipment-Qty",
     "Unit": "Unit",
     "CRD": "CRD",
+    "PriceResult": "ผลการเสนอราคา",
+    "MoreInfo": "ข้อมูลเพิ่มเติม",
 }
 COL_WIDTHS_OP_PDPU = {
-    "DO": 145, "PDPUMain": 70, "AccountCode": 100, "Account": 200,
-    "ProdCode": 110, "ProdName": 380, "ShipQty": 105, "Unit": 55, "CRD": 95,
+    "DO": 145, "AccountCode": 100, "Account": 200,
+    "ProdCode": 110, "ProdName": 320, "ShipQty": 105, "Unit": 55, "CRD": 95,
+    "PriceResult": 140, "MoreInfo": 200,
 }
 GROUP_WIDTH_OP_PDPU = 130
 SORT_KEYS_OP_PDPU = ["DO", "Account"]
@@ -914,8 +902,7 @@ SORT_KEYS_OP_PDPU = ["DO", "Account"]
 STATUS_COL_PQ = "c-B0Rs5QyYq3"  # Status
 ORDER_SHIPMENT_COL_PQ = "c-IrtKcErAtQ"
 CREATED_COL_PQ = "c-kJEll1twNl"  # Created(thisRow)
-PDPU_COL_PQ = "c-e3K7rOgynm"  # PD/PU -- group column (with Account Name)
-ACCOUNT_COL_PQ = "c-zZsm603C_I"  # Account Name -- group column (with PD/PU)
+ACCOUNT_COL_PQ = "c-zZsm603C_I"  # Account Name -- group column (เอา PD/PU ออกแล้ว)
 STATUS_EXCLUDE_PQ = {"จองคิวผลิตแล้ว", "ยกเลิกการเช็คแผนผลิต"}
 
 BANGKOK_TZ = timezone(timedelta(hours=7))
@@ -938,7 +925,7 @@ def parse_datetime(raw):
     return to_bangkok_naive(dt)
 
 
-# "Created หลัง 10 โมงเช้าของเมื่อวาน" -- yesterday 10:00 Asia/Bangkok, computed at run time
+# "Created หลัง 10 โมงเช้าของเมื่อวาน" -- yesterday 10:00 Asia/Bangkok
 CREATED_CUTOFF_PQ = (to_bangkok_naive(datetime.now(timezone.utc)) - timedelta(days=1)).replace(
     hour=10, minute=0, second=0, microsecond=0
 )
@@ -975,8 +962,7 @@ COL_WIDTHS_PQ = {
     "ProdName": 340, "Qty": 90, "Unit": 55, "Status": 190, "CATRoll": 150,
     "DeliveryPoint": 100, "Sales": 160,
 }
-PDPU_GROUP_WIDTH_PQ = 70
-ACCOUNT_GROUP_WIDTH_PQ = 180
+ACCOUNT_GROUP_WIDTH_PQ = 200
 SORT_KEYS_PQ = ["CRD", "SONo"]
 
 FONT_REGULAR_CANDIDATES = [
@@ -1006,18 +992,19 @@ def is_blank(cell):
 
 
 def fmt_date(raw):
+    """เปลี่ยนฟอร์แมตวันที่ทุกจุดให้เป็น YYYY-MM-DD"""
     v = extract_value(raw)
     if not v:
         return "-"
     s = str(v)
     try:
         dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
-        return dt.strftime("%d/%m/%Y")
+        return dt.strftime("%Y-%m-%d")
     except ValueError:
         pass
     for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y"):
         try:
-            return datetime.strptime(s, fmt).strftime("%d/%m/%Y")
+            return datetime.strptime(s, fmt).strftime("%Y-%m-%d")
         except ValueError:
             continue
     return s
@@ -1040,7 +1027,7 @@ def fetch_page(base, headers, params, max_attempts=4):
         except (requests.exceptions.RequestException,) as exc:
             if attempt == max_attempts:
                 raise
-            wait = 2 ** attempt  # 2, 4, 8 seconds
+            wait = 2 ** attempt
             print(f"::warning::Coda request failed ({exc}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
             time.sleep(wait)
 
@@ -1063,7 +1050,7 @@ def fetch_rows(table_id, visible_cols):
     return rows
 
 
-def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, sort_keys):
+def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, sort_keys, custom_sort_fn=None):
     records = []
     for row in raw_rows:
         vals = row.get("values", {})
@@ -1089,8 +1076,11 @@ def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, s
                 rec[key] = str(v) if v not in (None, "") else "-"
         records.append(rec)
 
-    group_prefix = ["GroupKey"] if group_spec else []
-    records.sort(key=lambda r: tuple([r[k] for k in group_prefix + sort_keys]))
+    if custom_sort_fn:
+        records.sort(key=custom_sort_fn)
+    else:
+        group_prefix = ["GroupKey"] if group_spec else []
+        records.sort(key=lambda r: tuple([r[k] for k in group_prefix + sort_keys]))
     return records
 
 
@@ -1098,11 +1088,6 @@ MAX_ROWS_PER_IMAGE = 50
 
 
 def cap_records(records, max_rows=MAX_ROWS_PER_IMAGE):
-    """Cap the rows rendered into one image so it can't grow unboundedly tall.
-
-    For grouped reports, a group in progress is always finished rather than
-    split mid-group, so the actual cutoff can land slightly past max_rows.
-    """
     total = len(records)
     if total <= max_rows:
         return records, total
@@ -1120,8 +1105,7 @@ def pick_font(candidates, size):
     for path in candidates:
         if os.path.exists(path):
             return ImageFont.truetype(path, size)
-    print(f"::warning::No Thai TTF found among {candidates}, falling back to default font "
-          f"(Thai text will not render correctly). Did the workflow install fonts-thai-tlwg?")
+    print(f"::warning::No Thai TTF found among {candidates}, falling back to default font.")
     return ImageFont.load_default()
 
 
@@ -1141,12 +1125,6 @@ def wrap_text(draw, text, font, max_width):
 
 
 def find_level_runs(records, level):
-    """Runs of consecutive records sharing the same GroupParts[:level+1] prefix.
-
-    Each group_spec column merges independently at its own nesting level: an
-    outer column (e.g. PD/PU) spans every consecutive row with the same value
-    regardless of how the inner column (e.g. Account Name) changes beneath it.
-    """
     runs = []
     run_start, n = 0, len(records)
     for i in range(1, n + 1):
@@ -1172,7 +1150,7 @@ DEFAULT_THEME = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (
 
 
 def render_image(records, out_path, title, columns, headers_th, col_widths, group_spec,
-                  wrap_key=None, theme=None, total_count=None):
+                 wrap_key=None, theme=None, total_count=None, fetch_time_str=None):
     theme = {**DEFAULT_THEME, **(theme or {})}
     total_count = len(records) if total_count is None else total_count
     grouped = bool(group_spec)
@@ -1241,8 +1219,11 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     draw = ImageDraw.Draw(img)
 
     draw.text((margin, 15), title, font=font_title, fill=NAVY)
-    today_str = datetime.now().strftime("%d/%m/%Y")
-    subtitle = f"ข้อมูล ณ วันที่ {today_str}"
+    
+    # แก้ไขรูปแบบวันที่เป็น YYYY-MM-DD และแสดงเวลาที่ดึงข้อมูล (หรือเวลาส่งเข้า Lark)
+    if not fetch_time_str:
+        fetch_time_str = datetime.now(BANGKOK_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    subtitle = f"ข้อมูล ณ วันที่ {fetch_time_str}"
     draw.text((margin, 50), subtitle, font=font_subtitle, fill=GRAY)
 
     table_top, table_left = title_area_h, margin
@@ -1252,6 +1233,12 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
         font = fit_text_font(draw, text, font, max_width)
         tw = draw.textlength(str(text), font=font)
         draw.text((x + max(6, (w - tw) / 2), y + h / 2 - font.size / 2), str(text), font=font, fill=fill)
+
+    def left_aligned_text(x, y, w, h, text, font, fill):
+        """สำหรับ Account Name จัดชิดซ้าย เว้นระยะ 8px"""
+        max_width = w - 16
+        font = fit_text_font(draw, text, font, max_width)
+        draw.text((x + 8, y + h / 2 - font.size / 2), str(text), font=font, fill=fill)
 
     def wrapped_header_text(x, y, w, h, text, font, fill):
         max_width = w - 12
@@ -1291,6 +1278,9 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     for line in lines:
                         draw.text((x + 8, ly), line, font=font, fill=DARK)
                         ly += font.size + 6
+                elif k == "Account":
+                    # เนื้อหา Account Name ชิดซ้าย
+                    left_aligned_text(x, y, w, h, r[k], font, DARK)
                 else:
                     centered_text(x, y, w, h, r[k], font, DARK)
                 x += w
@@ -1390,6 +1380,13 @@ THEME_NAVY = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (255
 THEME_PURPLE = {"navy": (76, 29, 149), "header_bg": (91, 33, 182), "group_bg": (237, 233, 254)}
 THEME_MAROON = {"navy": (127, 29, 29), "header_bg": (153, 27, 27), "group_bg": (254, 226, 226)}
 
+# ฟังก์ชันจัดเรียงสำหรับตาราง 2 และ 4 (ให้ SM, PD, PU, OP ขึ้นก่อนตามลำดับ)
+def sort_by_change_type(r):
+    group_val = r["GroupParts"][0].strip().upper() if r.get("GroupParts") else ""
+    order = GROUP_SORT_ORDER.get(group_val, 99)
+    return (order, group_val, r.get("DO", ""), r.get("Account", ""))
+
+
 REPORTS = [
     {
         "table_id": TABLE_ID_OP_PDPU,
@@ -1422,6 +1419,7 @@ REPORTS = [
         "date_keys": DATE_KEYS,
         "num_keys": NUM_KEYS,
         "sort_keys": SORT_KEYS,
+        "custom_sort_fn": sort_by_change_type,  # เรียงตาม SM, PD, PU, OP
         "wrap_key": "ProdName",
         "out_path": "pos_daily_grouped.png",
     },
@@ -1439,8 +1437,8 @@ REPORTS = [
             "(Status not in {จองคิวผลิตแล้ว, ยกเลิกการเช็คแผนผลิต} OR Order-Shipment blank) "
             f"AND Created > {CREATED_CUTOFF_PQ.isoformat()} (Asia/Bangkok)"
         ),
+        # เอา PD/PU ออก เหลือ Group แค่ Account Name
         "group_spec": [
-            {"col": PDPU_COL_PQ, "label": "PD/PU", "width": PDPU_GROUP_WIDTH_PQ, "is_date": False, "align": "left"},
             {"col": ACCOUNT_COL_PQ, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH_PQ, "is_date": False, "align": "left"},
         ],
         "columns": COLUMNS_PQ,
@@ -1468,6 +1466,7 @@ REPORTS = [
         "date_keys": DATE_KEYS,
         "num_keys": NUM_KEYS,
         "sort_keys": SORT_KEYS,
+        "custom_sort_fn": sort_by_change_type,  # เรียงตาม SM, PD, PU, OP
         "wrap_key": "ProdName",
         "out_path": "pos_hold_cancel_grouped.png",
     },
@@ -1475,8 +1474,10 @@ REPORTS = [
 
 
 def main():
-    # Fetch each distinct table only once per run (multiple reports can share a table_id),
-    # using the union of columns every report against that table needs.
+    # บันทึกเวลาเริ่มต้นที่ดึงข้อมูล (ใช้เวลาเดียวกันสำหรับทุกตาราง เพื่อความสอดคล้อง)
+    fetch_time_str = datetime.now(BANGKOK_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"Start fetching data at: {fetch_time_str} (Asia/Bangkok)")
+
     table_visible_cols = {}
     for report in REPORTS:
         group_spec = report.get("group_spec")
@@ -1495,7 +1496,7 @@ def main():
         raw_rows = raw_rows_by_table[report["table_id"]]
         records = build_records(
             raw_rows, report["matches"], report["columns"], report["date_keys"], report["num_keys"],
-            group_spec, report["sort_keys"],
+            group_spec, report.get("sort_keys", []), report.get("custom_sort_fn")
         )
         print(f"{len(records)} rows match filter ({report['filter_desc']})")
         records, total_count = cap_records(records)
@@ -1504,7 +1505,7 @@ def main():
         render_image(
             records, report["out_path"], report["title"],
             report["columns"], report["headers"], report["col_widths"], group_spec,
-            report["wrap_key"], report.get("theme"), total_count,
+            report["wrap_key"], report.get("theme"), total_count, fetch_time_str
         )
         print(f"Saved image: {report['out_path']}")
         for bot in LARK_BOTS:
