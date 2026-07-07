@@ -271,6 +271,20 @@ def fmt_num(raw):
         return str(v) if v else "-"
 
 
+def fetch_page(base, headers, params, max_attempts=4):
+    for attempt in range(1, max_attempts + 1):
+        try:
+            resp = requests.get(base, headers=headers, params=params, timeout=60)
+            resp.raise_for_status()
+            return resp.json()
+        except (requests.exceptions.RequestException,) as exc:
+            if attempt == max_attempts:
+                raise
+            wait = 2 ** attempt  # 2, 4, 8 seconds
+            print(f"::warning::Coda request failed ({exc}), retrying in {wait}s (attempt {attempt}/{max_attempts})")
+            time.sleep(wait)
+
+
 def fetch_rows(table_id, visible_cols):
     base = f"https://coda.io/apis/v1/docs/{DOC_ID}/tables/{table_id}/rows"
     headers = {"Authorization": f"Bearer {CODA_API_TOKEN}"}
@@ -280,9 +294,7 @@ def fetch_rows(table_id, visible_cols):
     page_token = None
     while True:
         params = {"pageToken": page_token} if page_token else base_params
-        resp = requests.get(base, headers=headers, params=params, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
+        data = fetch_page(base, headers, params)
         rows.extend(data.get("items", []))
         page_token = data.get("nextPageToken")
         if not page_token:
@@ -701,13 +713,24 @@ REPORTS = [
 
 
 def main():
+    # Fetch each distinct table only once per run (multiple reports can share a table_id),
+    # using the union of columns every report against that table needs.
+    table_visible_cols = {}
+    for report in REPORTS:
+        group_spec = report.get("group_spec")
+        group_cols = [g["col"] for g in group_spec] if group_spec else []
+        cols = group_cols + report["extra_filter_cols"] + [c for c, _ in report["columns"]]
+        table_visible_cols.setdefault(report["table_id"], set()).update(cols)
+
+    raw_rows_by_table = {}
+    for table_id, cols in table_visible_cols.items():
+        raw_rows_by_table[table_id] = fetch_rows(table_id, list(cols))
+        print(f"Fetched {len(raw_rows_by_table[table_id])} raw rows from Coda table {table_id}")
+
     for report in REPORTS:
         print(f"--- {report['title']} (table {report['table_id']}) ---")
         group_spec = report.get("group_spec")
-        group_cols = [g["col"] for g in group_spec] if group_spec else []
-        visible_cols = group_cols + report["extra_filter_cols"] + [c for c, _ in report["columns"]]
-        raw_rows = fetch_rows(report["table_id"], visible_cols)
-        print(f"Fetched {len(raw_rows)} raw rows from Coda table {report['table_id']}")
+        raw_rows = raw_rows_by_table[report["table_id"]]
         records = build_records(
             raw_rows, report["matches"], report["columns"], report["date_keys"], report["num_keys"],
             group_spec, report["sort_keys"],
