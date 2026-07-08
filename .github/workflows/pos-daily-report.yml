@@ -2,8 +2,12 @@ name: POS Daily Lark Report
 
 on:
   schedule:
-    # 01:00 UTC = 08:00 Asia/Bangkok. Adjust to taste.
-    - cron: "0 1 * * *"
+    # 00:54 UTC = ~07:54 Asia/Bangkok -- starts ~6 min before 08:00 so the report
+    # (checkout + setup + fetch + render + send, observed ~3 min) has finished
+    # sending by 08:00, not just started. Offset off :00 -- GitHub's own docs warn
+    # round-minute schedules are more likely to be delayed/dropped under load,
+    # since many repos worldwide pick the same round times.
+    - cron: "54 0 * * *"
   workflow_dispatch: {}
 
 jobs:
