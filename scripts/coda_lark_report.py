@@ -293,10 +293,9 @@ TODAY_STR = datetime.now().strftime("%Y-%m-%d")  # dates are formatted YYYY-MM-D
 
 
 def report_round_label():
-    """เวลารายงานที่ตั้ง cron ไว้คือ 08:00 และ 18:00 น. (Asia/Bangkok) -- ใช้เวลาปัจจุบันเทียบว่าใกล้รอบไหนที่สุด"""
+    """เวลาที่ส่งจริง (Asia/Bangkok) ไม่ใช่เวลาตาม cron ที่ตั้งไว้."""
     now_bkk = datetime.now(BANGKOK_TZ)
-    round_time = "08:00" if now_bkk.hour < 13 else "18:00"
-    return f"ข้อมูล ณ วันที่ {now_bkk.strftime('%Y-%m-%d')} รอบ {round_time} น."
+    return f"ข้อมูล ณ วันที่ {now_bkk.strftime('%Y-%m-%d')} เวลา {now_bkk.strftime('%H:%M')} น."
 
 
 def is_overdue_by_key(rec, key):
