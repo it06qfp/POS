@@ -666,7 +666,7 @@ def combine_images(image_paths, out_path, header_text=None, gap=24):
 
     if header_text:
         draw = ImageDraw.Draw(combined)
-        font = pick_font(FONT_REGULAR_CANDIDATES, 15)
+        font = pick_font(FONT_REGULAR_CANDIDATES, 12)
         tw = draw.textlength(header_text, font=font)
         draw.text((target_width - margin - tw, header_h / 2), header_text, font=font, fill=(110, 110, 120), anchor="lm")
 
