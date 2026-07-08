@@ -580,13 +580,26 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
 
 
 def combine_images(image_paths, out_path, gap=24):
-    """Stack report images vertically into a single image for one combined Lark message."""
+    """Stack report images vertically into a single image for one combined Lark message.
+
+    Each report has a different column count/widths, so their canvases aren't the
+    same width. Scale every image proportionally to the widest one instead of just
+    left-pasting them, so the combined image has one consistent table width.
+    """
     imgs = [Image.open(p) for p in image_paths]
-    width = max(img.width for img in imgs)
-    height = sum(img.height for img in imgs) + gap * (len(imgs) - 1)
-    combined = Image.new("RGB", (width, height), "white")
-    y = 0
+    target_width = max(img.width for img in imgs)
+
+    resized = []
     for img in imgs:
+        if img.width != target_width:
+            scale = target_width / img.width
+            img = img.resize((target_width, round(img.height * scale)), Image.LANCZOS)
+        resized.append(img)
+
+    height = sum(img.height for img in resized) + gap * (len(resized) - 1)
+    combined = Image.new("RGB", (target_width, height), "white")
+    y = 0
+    for img in resized:
         combined.paste(img, (0, y))
         y += img.height + gap
     combined.save(out_path)
