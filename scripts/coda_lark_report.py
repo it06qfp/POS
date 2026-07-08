@@ -567,9 +567,12 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     block_h = label_block_h + GROUP_BLOCK_GAP + count_line_h
                     start_y = top_y + (group_h - block_h) / 2
 
-                    box_fill = GROUP_BG
-                    if level == 0 and level0_color_fn:
+                    if not g.get("colored", True):
+                        box_fill = WHITE
+                    elif level == 0 and level0_color_fn:
                         box_fill = level0_color_fn(part)
+                    else:
+                        box_fill = GROUP_BG
                     draw.rectangle([gx0, top_y, gx0 + g["width"], top_y + group_h], fill=box_fill, outline=BORDER)
                     text_x = gx0 + 8 if align == "left" else gx0 + g["width"] / 2
                     text_anchor_h = "l" if align == "left" else "m"
@@ -707,7 +710,7 @@ REPORTS = [
         "filter_desc": "รอคุยในที่ประชุม is blank",
         "group_spec": [
             {"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False, "align": "left"},
-            {"col": ACCOUNT_COL, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH, "is_date": False, "align": "left"},
+            {"col": ACCOUNT_COL, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH, "is_date": False, "align": "left", "colored": False},
         ],
         "level0_color_fn": group_color_by_role,
         "columns": COLUMNS,
@@ -759,7 +762,7 @@ REPORTS = [
         "filter_desc": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)} AND รอคุยในที่ประชุม is blank",
         "group_spec": [
             {"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False, "align": "left"},
-            {"col": ACCOUNT_COL, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH, "is_date": False, "align": "left"},
+            {"col": ACCOUNT_COL, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH, "is_date": False, "align": "left", "colored": False},
         ],
         "level0_color_fn": group_color_by_role,
         "columns": COLUMNS,
