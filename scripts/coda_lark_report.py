@@ -52,10 +52,10 @@ STATUS_COL = "c-HvRU96fdFo"  # Status_DO-Shipment
 STATUS_FILTER_VALUE = "OP เลือก PD/PU"
 STATUS_INCLUDE_HOLD = {"ยกเลิก", "Hold", "รอแจ้ง"}
 GROUP_COL = "c-jF5iOvd80f"  # รายการแจ้งเปลี่ยนแปลง -- merged group column
+ACCOUNT_COL = "c-zk747feqUX"  # Account Name -- 2nd-level merged group column (nested under GROUP_COL)
 
 # --- report 1 & 4 schema (meeting table / hold-cancel) ---
 COLUMNS = [
-    ("c-zk747feqUX", "Account"),
     ("c-lCcIWuw_5l", "DO"),
     ("c-zcDPi1nMsT", "OrderQty"),
     ("c-PVu77YUoUi", "ShipQty"),
@@ -74,7 +74,6 @@ DATE_KEYS = {"CRD0", "CRDEdit", "LoadConfirm", "ArriveDate"}
 NUM_KEYS = {"OrderQty", "ShipQty"}
 
 HEADERS_TH = {
-    "Account": "Account Name",
     "DO": "DO-shipment",
     "OrderQty": "จำนวนเปิด Order",
     "ShipQty": "Shipment-Qty",
@@ -90,15 +89,46 @@ HEADERS_TH = {
     "Status": "Status_DO-Shipment",
 }
 COL_WIDTHS = {
-    "Account": 240, "DO": 145, "OrderQty": 95, "ShipQty": 105, "Unit": 50,
+    "DO": 145, "OrderQty": 95, "ShipQty": 105, "Unit": 50,
     "PDPU": 65, "MOPR": 110, "ProdCode": 110, "ProdName": 380, "CRD0": 95,
     "CRDEdit": 100, "LoadConfirm": 95, "ArriveDate": 100, "Status": 160,
 }
 GROUP_WIDTH = 200
-SORT_KEYS = ["DO", "Account"]
+ACCOUNT_GROUP_WIDTH = 200
+SORT_KEYS = ["DO"]
 
 # ลำดับการเรียงสำหรับคอลัมน์ "รายการแจ้งเปลี่ยนแปลง" (SM, PD, PU, OP)
 GROUP_SORT_ORDER = {"SM": 1, "PD": 2, "PU": 3, "OP": 4}
+
+# สีพื้นหลังกล่องกรุ๊ป (คอลัมน์แรกที่กรุ๊ป) แยกตามค่า
+# SM/PD/PU/OP: สีตายตัวตามหมวด, ค่าอื่น (เช่น วันที่ / Account Name ที่ไม่จำกัดจำนวน): วนสีจาก palette แบบคงที่ (เดิมได้สีเดิมเสมอ)
+GROUP_ROLE_COLORS = {
+    "SM": (255, 244, 214),  # เหลืองอ่อน
+    "PD": (219, 234, 254),  # ฟ้าอ่อน
+    "PU": (220, 252, 231),  # เขียวอ่อน
+    "OP": (237, 233, 254),  # ม่วงอ่อน
+}
+GROUP_COLOR_PALETTE = [
+    (255, 244, 214), (219, 234, 254), (220, 252, 231), (237, 233, 254),
+    (254, 226, 226), (254, 240, 199), (224, 242, 254), (232, 252, 240),
+]
+
+
+def stable_hash_index(value, n):
+    """Deterministic (non-random) hash so the same value always maps to the same color across runs."""
+    h = 0
+    for ch in str(value):
+        h = (h * 31 + ord(ch)) % 1000003
+    return h % n
+
+
+def group_color_by_role(group_text):
+    prefix = group_text.strip().split(" ", 1)[0].upper() if group_text else ""
+    return GROUP_ROLE_COLORS.get(prefix, GROUP_COLOR_PALETTE[stable_hash_index(group_text, len(GROUP_COLOR_PALETTE))])
+
+
+def group_color_by_value(group_text):
+    return GROUP_COLOR_PALETTE[stable_hash_index(group_text, len(GROUP_COLOR_PALETTE))]
 
 # --- report 1 schema (OP เลือก PD/PU, grouped by วันแจ้งPOS) ---
 NOTIFY_DATE_COL_OP_PDPU = "c-n3S3kQntLR"  # วันแจ้งPOS -- group column
@@ -391,7 +421,7 @@ DEFAULT_THEME = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (
 
 
 def render_image(records, out_path, title, columns, headers_th, col_widths, group_spec,
-                 wrap_key=None, theme=None, total_count=None, left_align_keys=frozenset()):
+                 wrap_key=None, theme=None, total_count=None, level0_color_fn=None):
     theme = {**DEFAULT_THEME, **(theme or {})}
     total_count = len(records) if total_count is None else total_count
     grouped = bool(group_spec)
@@ -472,12 +502,6 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
         tw = draw.textlength(str(text), font=font)
         draw.text((x + max(6, (w - tw) / 2), y + h / 2 - font.size / 2), str(text), font=font, fill=fill)
 
-    def left_aligned_text(x, y, w, h, text, font, fill):
-        """สำหรับ Account Name จัดชิดซ้าย เว้นระยะ 8px"""
-        max_width = w - 16
-        font = fit_text_font(draw, text, font, max_width)
-        draw.text((x + 8, y + h / 2 - font.size / 2), str(text), font=font, fill=fill)
-
     def wrapped_header_text(x, y, w, h, text, font, fill):
         max_width = w - 12
         lines = wrap_text(draw, text, font, max_width)
@@ -516,8 +540,6 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     for line in lines:
                         draw.text((x + 8, ly), line, font=font, fill=DARK)
                         ly += font.size + 6
-                elif k in left_align_keys:
-                    left_aligned_text(x, y, w, h, r[k], font, DARK)
                 else:
                     centered_text(x, y, w, h, r[k], font, DARK)
                 x += w
@@ -545,7 +567,10 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     block_h = label_block_h + GROUP_BLOCK_GAP + count_line_h
                     start_y = top_y + (group_h - block_h) / 2
 
-                    draw.rectangle([gx0, top_y, gx0 + g["width"], top_y + group_h], fill=GROUP_BG, outline=BORDER)
+                    box_fill = GROUP_BG
+                    if level == 0 and level0_color_fn:
+                        box_fill = level0_color_fn(part)
+                    draw.rectangle([gx0, top_y, gx0 + g["width"], top_y + group_h], fill=box_fill, outline=BORDER)
                     text_x = gx0 + 8 if align == "left" else gx0 + g["width"] / 2
                     text_anchor_h = "l" if align == "left" else "m"
                     ly = start_y
@@ -646,10 +671,12 @@ THEME_MAROON = {"navy": (127, 29, 29), "header_bg": (153, 27, 27), "group_bg": (
 
 # ฟังก์ชันจัดเรียงสำหรับตาราง 2 และ 4 (ให้ SM, PD, PU, OP ขึ้นก่อนตามลำดับ)
 def sort_by_change_type(r):
-    group_text = r["GroupParts"][0] if r.get("GroupParts") else ""
+    parts = r.get("GroupParts", [])
+    group_text = parts[0] if len(parts) > 0 else ""
+    account_name = parts[1] if len(parts) > 1 else ""
     prefix = group_text.strip().split(" ", 1)[0].upper() if group_text else ""
     order = GROUP_SORT_ORDER.get(prefix, 99)
-    return (order, group_text, r.get("DO", ""), r.get("Account", ""))
+    return (order, group_text, account_name, r.get("DO", ""))
 
 
 REPORTS = [
@@ -661,6 +688,7 @@ REPORTS = [
         "matches": lambda vals: extract_value(vals.get(STATUS_COL)) == STATUS_FILTER_VALUE,
         "filter_desc": f"Status_DO-Shipment = {STATUS_FILTER_VALUE}",
         "group_spec": [{"col": NOTIFY_DATE_COL_OP_PDPU, "label": "วันแจ้งPOS", "width": GROUP_WIDTH_OP_PDPU, "is_date": True, "align": "left"}],
+        "level0_color_fn": group_color_by_value,
         "columns": COLUMNS_OP_PDPU,
         "headers": HEADERS_TH_OP_PDPU,
         "col_widths": COL_WIDTHS_OP_PDPU,
@@ -677,7 +705,11 @@ REPORTS = [
         "extra_filter_cols": [FILTER_COL],
         "matches": lambda vals: is_blank(vals.get(FILTER_COL)),
         "filter_desc": "รอคุยในที่ประชุม is blank",
-        "group_spec": [{"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False, "align": "left"}],
+        "group_spec": [
+            {"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False, "align": "left"},
+            {"col": ACCOUNT_COL, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH, "is_date": False, "align": "left"},
+        ],
+        "level0_color_fn": group_color_by_role,
         "columns": COLUMNS,
         "headers": HEADERS_TH,
         "col_widths": COL_WIDTHS,
@@ -685,7 +717,6 @@ REPORTS = [
         "num_keys": NUM_KEYS,
         "sort_keys": SORT_KEYS,
         "custom_sort_fn": sort_by_change_type,  # เรียงตาม SM, PD, PU, OP
-        "left_align_keys": {"Account"},
         "wrap_key": "ProdName",
         "out_path": "pos_daily_grouped.png",
     },
@@ -707,6 +738,7 @@ REPORTS = [
         "group_spec": [
             {"col": ACCOUNT_COL_PQ, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH_PQ, "is_date": False, "align": "left"},
         ],
+        "level0_color_fn": group_color_by_value,
         "columns": COLUMNS_PQ,
         "headers": HEADERS_TH_PQ,
         "col_widths": COL_WIDTHS_PQ,
@@ -725,7 +757,11 @@ REPORTS = [
             extract_value(vals.get(STATUS_COL)) in STATUS_INCLUDE_HOLD and is_blank(vals.get(FILTER_COL))
         ),
         "filter_desc": f"Status_DO-Shipment in {sorted(STATUS_INCLUDE_HOLD)} AND รอคุยในที่ประชุม is blank",
-        "group_spec": [{"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False, "align": "left"}],
+        "group_spec": [
+            {"col": GROUP_COL, "label": "รายการแจ้งเปลี่ยนแปลง", "width": GROUP_WIDTH, "is_date": False, "align": "left"},
+            {"col": ACCOUNT_COL, "label": "Account Name", "width": ACCOUNT_GROUP_WIDTH, "is_date": False, "align": "left"},
+        ],
+        "level0_color_fn": group_color_by_role,
         "columns": COLUMNS,
         "headers": HEADERS_TH,
         "col_widths": COL_WIDTHS,
@@ -733,7 +769,6 @@ REPORTS = [
         "num_keys": NUM_KEYS,
         "sort_keys": SORT_KEYS,
         "custom_sort_fn": sort_by_change_type,  # เรียงตาม SM, PD, PU, OP
-        "left_align_keys": {"Account"},
         "wrap_key": "ProdName",
         "out_path": "pos_hold_cancel_grouped.png",
     },
@@ -768,7 +803,7 @@ def main():
         render_image(
             records, report["out_path"], report["title"],
             report["columns"], report["headers"], report["col_widths"], group_spec,
-            report["wrap_key"], report.get("theme"), total_count, report.get("left_align_keys", frozenset()),
+            report["wrap_key"], report.get("theme"), total_count, report.get("level0_color_fn"),
         )
         print(f"Saved image: {report['out_path']}")
 
