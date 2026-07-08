@@ -289,6 +289,26 @@ def fmt_num(raw):
         return str(v) if v else "-"
 
 
+TODAY_STR = datetime.now().strftime("%Y-%m-%d")  # dates are formatted YYYY-MM-DD, so lexical compare = date compare
+
+
+def is_overdue_by_key(rec, key):
+    v = rec.get(key)
+    return bool(v) and v != "-" and v < TODAY_STR
+
+
+def overdue_by_crd(rec):
+    """report 1 & 3: single CRD column."""
+    return is_overdue_by_key(rec, "CRD")
+
+
+def overdue_by_crd_edit_or_original(rec):
+    """report 2 & 4: effective CRD = CRD Sales Edit if set, else CRDตั้งต้น (mirrors the doc's own CRD formula)."""
+    crd_edit = rec.get("CRDEdit")
+    effective_key = "CRDEdit" if crd_edit and crd_edit != "-" else "CRD0"
+    return is_overdue_by_key(rec, effective_key)
+
+
 def fetch_page(base, headers, params, max_attempts=4):
     for attempt in range(1, max_attempts + 1):
         try:
@@ -321,7 +341,8 @@ def fetch_rows(table_id, visible_cols):
     return rows
 
 
-def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, sort_keys, custom_sort_fn=None):
+def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, sort_keys,
+                   custom_sort_fn=None, overdue_fn=None):
     records = []
     for row in raw_rows:
         vals = row.get("values", {})
@@ -345,6 +366,7 @@ def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, s
             else:
                 v = extract_value(raw)
                 rec[key] = str(v) if v not in (None, "") else "-"
+        rec["_overdue"] = bool(overdue_fn(rec)) if overdue_fn else False
         records.append(rec)
 
     if custom_sort_fn:
@@ -421,7 +443,7 @@ DEFAULT_THEME = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (
 
 
 def render_image(records, out_path, title, columns, headers_th, col_widths, group_spec,
-                 wrap_key=None, theme=None, total_count=None, level0_color_fn=None):
+                 wrap_key=None, theme=None, total_count=None, level0_color_fn=None, num_keys=frozenset()):
     theme = {**DEFAULT_THEME, **(theme or {})}
     total_count = len(records) if total_count is None else total_count
     grouped = bool(group_spec)
@@ -485,6 +507,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     GROUP_BG, ALT_ROW_BG = theme["group_bg"], (250, 251, 255)
     BORDER, OUTER_BORDER = (228, 228, 235), (200, 200, 210)
     EMPTY_RED = (200, 30, 30)
+    OVERDUE_BG = (255, 214, 214)
 
     img = Image.new("RGB", (canvas_width, canvas_height), "white")
     draw = ImageDraw.Draw(img)
@@ -501,6 +524,11 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
         font = fit_text_font(draw, text, font, max_width)
         tw = draw.textlength(str(text), font=font)
         draw.text((x + max(6, (w - tw) / 2), y + h / 2 - font.size / 2), str(text), font=font, fill=fill)
+
+    def right_aligned_text(x, y, w, h, text, font, fill):
+        max_width = w - 16
+        font = fit_text_font(draw, text, font, max_width)
+        draw.text((x + w - 8, y + h / 2), str(text), font=font, fill=fill, anchor="rm")
 
     def wrapped_header_text(x, y, w, h, text, font, fill):
         max_width = w - 12
@@ -529,7 +557,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
         for i, r in enumerate(records):
             row_y_positions.append(y)
             h = row_heights[i]
-            bg = ALT_ROW_BG if i % 2 == 0 else WHITE
+            bg = OVERDUE_BG if r.get("_overdue") else (ALT_ROW_BG if i % 2 == 0 else WHITE)
             x = table_left + group_width
             for k, w in zip(keys, col_ws):
                 draw.rectangle([x, y, x + w, y + h], fill=bg, outline=BORDER)
@@ -540,6 +568,8 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
                     for line in lines:
                         draw.text((x + 8, ly), line, font=font, fill=DARK)
                         ly += font.size + 6
+                elif k in num_keys:
+                    right_aligned_text(x, y, w, h, r[k], font, DARK)
                 else:
                     centered_text(x, y, w, h, r[k], font, DARK)
                 x += w
@@ -698,6 +728,7 @@ REPORTS = [
         "date_keys": DATE_KEYS_OP_PDPU,
         "num_keys": NUM_KEYS_OP_PDPU,
         "sort_keys": SORT_KEYS_OP_PDPU,
+        "overdue_fn": overdue_by_crd,
         "wrap_key": "ProdName",
         "out_path": "pos_op_pdpu_grouped.png",
     },
@@ -720,6 +751,7 @@ REPORTS = [
         "num_keys": NUM_KEYS,
         "sort_keys": SORT_KEYS,
         "custom_sort_fn": sort_by_change_type,  # เรียงตาม SM, PD, PU, OP
+        "overdue_fn": overdue_by_crd_edit_or_original,
         "wrap_key": "ProdName",
         "out_path": "pos_daily_grouped.png",
     },
@@ -748,6 +780,7 @@ REPORTS = [
         "date_keys": DATE_KEYS_PQ,
         "num_keys": NUM_KEYS_PQ,
         "sort_keys": SORT_KEYS_PQ,
+        "overdue_fn": overdue_by_crd,
         "wrap_key": "ProdName",
         "out_path": "pos_prod_queue_grouped.png",
     },
@@ -772,6 +805,7 @@ REPORTS = [
         "num_keys": NUM_KEYS,
         "sort_keys": SORT_KEYS,
         "custom_sort_fn": sort_by_change_type,  # เรียงตาม SM, PD, PU, OP
+        "overdue_fn": overdue_by_crd_edit_or_original,
         "wrap_key": "ProdName",
         "out_path": "pos_hold_cancel_grouped.png",
     },
@@ -797,7 +831,7 @@ def main():
         raw_rows = raw_rows_by_table[report["table_id"]]
         records = build_records(
             raw_rows, report["matches"], report["columns"], report["date_keys"], report["num_keys"],
-            group_spec, report.get("sort_keys", []), report.get("custom_sort_fn")
+            group_spec, report.get("sort_keys", []), report.get("custom_sort_fn"), report.get("overdue_fn"),
         )
         print(f"{len(records)} rows match filter ({report['filter_desc']})")
         records, total_count = cap_records(records)
@@ -807,6 +841,7 @@ def main():
             records, report["out_path"], report["title"],
             report["columns"], report["headers"], report["col_widths"], group_spec,
             report["wrap_key"], report.get("theme"), total_count, report.get("level0_color_fn"),
+            report["num_keys"],
         )
         print(f"Saved image: {report['out_path']}")
 
