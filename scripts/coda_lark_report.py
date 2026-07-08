@@ -292,6 +292,13 @@ def fmt_num(raw):
 TODAY_STR = datetime.now().strftime("%Y-%m-%d")  # dates are formatted YYYY-MM-DD, so lexical compare = date compare
 
 
+def report_round_label():
+    """เวลารายงานที่ตั้ง cron ไว้คือ 08:00 และ 18:00 น. (Asia/Bangkok) -- ใช้เวลาปัจจุบันเทียบว่าใกล้รอบไหนที่สุด"""
+    now_bkk = datetime.now(BANGKOK_TZ)
+    round_time = "08:00" if now_bkk.hour < 13 else "18:00"
+    return f"ข้อมูล ณ วันที่ {now_bkk.strftime('%Y-%m-%d')} รอบ {round_time} น."
+
+
 def is_overdue_by_key(rec, key):
     v = rec.get(key)
     return bool(v) and v != "-" and v < TODAY_STR
@@ -450,7 +457,6 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     group_width = sum(g["width"] for g in group_spec) if grouped else 0
 
     font_title = pick_font(FONT_BOLD_CANDIDATES, 24)
-    font_subtitle = pick_font(FONT_REGULAR_CANDIDATES, 14)
     font_header = pick_font(FONT_BOLD_CANDIDATES, 12)
     font_group = pick_font(FONT_BOLD_CANDIDATES, 14)
     font_bold_cell = pick_font(FONT_BOLD_CANDIDATES, 13)
@@ -495,7 +501,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     header_texts = ([(g["label"], g["width"]) for g in group_spec] if grouped else []) + [(headers_th[k], w) for k, w in zip(keys, col_ws)]
     max_header_lines = max(len(wrap_text(probe, text, font_header, w - 12)) for text, w in header_texts)
 
-    title_area_h = 90
+    title_area_h = 55
     header_h = max(52, max_header_lines * (font_header.size + 4) + 16)
     footer_area_h = 40
     empty_row_h = 60
@@ -512,10 +518,7 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     img = Image.new("RGB", (canvas_width, canvas_height), "white")
     draw = ImageDraw.Draw(img)
 
-    draw.text((margin, 15), title, font=font_title, fill=NAVY)
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    subtitle = f"ข้อมูล ณ วันที่ {today_str}"
-    draw.text((margin, 50), subtitle, font=font_subtitle, fill=GRAY)
+    draw.text((margin, title_area_h / 2), title, font=font_title, fill=NAVY, anchor="lm")
 
     table_top, table_left = title_area_h, margin
 
@@ -637,12 +640,15 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     img.save(out_path)
 
 
-def combine_images(image_paths, out_path, gap=24):
+def combine_images(image_paths, out_path, header_text=None, gap=24):
     """Stack report images vertically into a single image for one combined Lark message.
 
     Each report has a different column count/widths, so their canvases aren't the
     same width. Scale every image proportionally to the widest one instead of just
     left-pasting them, so the combined image has one consistent table width.
+
+    header_text, if given, is drawn once at the top-right corner (date + which
+    daily round -- 08:00/18:00) instead of repeating it under every table title.
     """
     imgs = [Image.open(p) for p in image_paths]
     target_width = max(img.width for img in imgs)
@@ -654,9 +660,18 @@ def combine_images(image_paths, out_path, gap=24):
             img = img.resize((target_width, round(img.height * scale)), Image.LANCZOS)
         resized.append(img)
 
-    height = sum(img.height for img in resized) + gap * (len(resized) - 1)
+    margin = 30
+    header_h = 40 if header_text else 0
+    height = header_h + sum(img.height for img in resized) + gap * (len(resized) - 1)
     combined = Image.new("RGB", (target_width, height), "white")
-    y = 0
+
+    if header_text:
+        draw = ImageDraw.Draw(combined)
+        font = pick_font(FONT_REGULAR_CANDIDATES, 15)
+        tw = draw.textlength(header_text, font=font)
+        draw.text((target_width - margin - tw, header_h / 2), header_text, font=font, fill=(110, 110, 120), anchor="lm")
+
+    y = header_h
     for img in resized:
         combined.paste(img, (0, y))
         y += img.height + gap
@@ -845,7 +860,9 @@ def main():
         )
         print(f"Saved image: {report['out_path']}")
 
-    combined_path = combine_images([report["out_path"] for report in REPORTS], "pos_all_reports_combined.png")
+    combined_path = combine_images(
+        [report["out_path"] for report in REPORTS], "pos_all_reports_combined.png", report_round_label(),
+    )
     print(f"Combined all {len(REPORTS)} reports into: {combined_path}")
     for bot in LARK_BOTS:
         send_to_lark(combined_path, bot["app_id"], bot["app_secret"], bot["webhook_url"])
