@@ -28,10 +28,9 @@ function setupTriggers() {
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === 'dispatchReport') ScriptApp.deleteTrigger(t);
   });
-  ScriptApp.newTrigger('dispatchReport').timeBased().atHour(7).nearMinute(45).everyDays(1).create();
-  ScriptApp.newTrigger('dispatchReport').timeBased().atHour(9).nearMinute(45).everyDays(1).create();  // เพิ่ม 10:00
-  ScriptApp.newTrigger('dispatchReport').timeBased().atHour(17).nearMinute(45).everyDays(1).create();
-  console.log('สร้าง trigger 07:45, 09:45 และ 17:45 เรียบร้อย');
+  ScriptApp.newTrigger('dispatchReport').timeBased().atHour(7).nearMinute(45).everyDays(1).create();   // เล็ง 08:00
+  ScriptApp.newTrigger('dispatchReport').timeBased().atHour(17).nearMinute(45).everyDays(1).create();  // เล็ง 18:00
+  console.log('สร้าง trigger 07:45,17:45 (เล็ง 08:00,18:00)');
 }
 
 
