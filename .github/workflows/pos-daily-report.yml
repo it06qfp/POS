@@ -29,4 +29,5 @@ jobs:
           LARK_APP_ID_2: ${{ secrets.LARK_APP_ID_2 }}
           LARK_APP_SECRET_2: ${{ secrets.LARK_APP_SECRET_2 }}
           LARK_WEBHOOK_URL_2: ${{ secrets.LARK_WEBHOOK_URL_2 }}
+          LARK_ALERT_WEBHOOK_URL: ${{ secrets.LARK_ALERT_WEBHOOK_URL }}
         run: python scripts/coda_lark_report.py

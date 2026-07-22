@@ -42,6 +42,14 @@ if _LARK_APP_ID_2 and _LARK_APP_SECRET_2 and _LARK_WEBHOOK_URL_2:
         "label": "secondary", "app_id": _LARK_APP_ID_2, "app_secret": _LARK_APP_SECRET_2, "webhook_url": _LARK_WEBHOOK_URL_2,
     })
 
+# บอทแจ้งเตือน -- อยู่ tenant เดียวกับ primary จึงใช้ app credentials ของ primary อัปโหลดรูปได้เลย
+# ได้รับรายงานภาพปกติทุกรอบเหมือน primary/secondary และยังเป็นช่องทางที่ send_alert() ใช้แจ้งข้อความ error ด้วย
+LARK_ALERT_WEBHOOK_URL = os.environ.get("LARK_ALERT_WEBHOOK_URL")
+if LARK_ALERT_WEBHOOK_URL:
+    LARK_BOTS.append({
+        "label": "alert", "app_id": LARK_APP_ID, "app_secret": LARK_APP_SECRET, "webhook_url": LARK_ALERT_WEBHOOK_URL,
+    })
+
 DOC_ID = os.environ.get("CODA_DOC_ID", "MiXbfRif1m")
 TABLE_ID = os.environ.get("CODA_TABLE_ID", "table-OA56XddNFI")
 TABLE_ID_OP_PDPU = os.environ.get("CODA_TABLE_ID_OP_PDPU", "grid-lV1uGeGQl2")
@@ -707,8 +715,26 @@ def send_to_lark(image_path, app_id, app_secret, webhook_url):
     result = send_resp.json()
     print("SEND_RESP:", json.dumps(result, ensure_ascii=False))
     if result.get("code") != 0:
-        print("::error::Lark send failed:", result)
-        sys.exit(1)
+        raise RuntimeError(f"Lark send failed: {result}")
+
+
+def send_alert(message):
+    """ส่งข้อความแจ้งเตือนไปยังบอทแจ้งเตือน (คนละบอทกับที่ส่งรายงาน) เมื่อรายงานสร้าง/ส่งไม่สำเร็จ."""
+    if not LARK_ALERT_WEBHOOK_URL:
+        print("::warning::LARK_ALERT_WEBHOOK_URL not set, skipping failure alert")
+        return
+    try:
+        resp = requests.post(
+            LARK_ALERT_WEBHOOK_URL,
+            json={"msg_type": "text", "content": {"text": message}},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        result = resp.json()
+        if result.get("code") != 0:
+            print(f"::error::Alert bot returned error: {result}")
+    except requests.exceptions.RequestException as exc:
+        print(f"::error::Failed to notify alert bot: {exc}")
 
 
 THEME_TEAL = {"navy": (13, 105, 100), "header_bg": (15, 118, 112), "group_bg": (214, 245, 241)}
@@ -826,7 +852,7 @@ REPORTS = [
 ]
 
 
-def main():
+def build_reports():
     table_visible_cols = {}
     for report in REPORTS:
         group_spec = report.get("group_spec")
@@ -863,9 +889,30 @@ def main():
         [report["out_path"] for report in REPORTS], "pos_all_reports_combined.png", report_round_label(),
     )
     print(f"Combined all {len(REPORTS)} reports into: {combined_path}")
+    return combined_path
+
+
+def main():
+    try:
+        combined_path = build_reports()
+    except Exception as exc:
+        print(f"::error::Failed to build POS Daily report: {exc}")
+        send_alert(f"🔴 POS Daily Report: สร้างรายงานไม่สำเร็จ\n{exc}")
+        raise
+
+    failures = []
     for bot in LARK_BOTS:
-        send_to_lark(combined_path, bot["app_id"], bot["app_secret"], bot["webhook_url"])
-        print(f"Sent to Lark ({bot['label']})")
+        try:
+            send_to_lark(combined_path, bot["app_id"], bot["app_secret"], bot["webhook_url"])
+            print(f"Sent to Lark ({bot['label']})")
+        except Exception as exc:
+            print(f"::error::Failed to send to Lark bot '{bot['label']}': {exc}")
+            failures.append(f"{bot['label']}: {exc}")
+
+    if failures:
+        detail = "\n".join(f"- {f}" for f in failures)
+        send_alert(f"🔴 POS Daily Report: ส่งรายงานไม่สำเร็จ ({len(failures)}/{len(LARK_BOTS)} บอท)\n{detail}")
+        sys.exit(1)
 
 
 if __name__ == "__main__":
