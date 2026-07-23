@@ -391,21 +391,12 @@ def build_records(raw_rows, matches, columns, date_keys, num_keys, group_spec, s
     return records
 
 
-MAX_ROWS_PER_IMAGE = 50
+MAX_ROWS_PER_IMAGE = 15
 
 
 def cap_records(records, max_rows=MAX_ROWS_PER_IMAGE):
     total = len(records)
-    if total <= max_rows:
-        return records, total
-    if not records or "GroupKey" not in records[0]:
-        return records[:max_rows], total
-    capped = []
-    for r in records:
-        if len(capped) >= max_rows and r["GroupKey"] != capped[-1]["GroupKey"]:
-            break
-        capped.append(r)
-    return capped, total
+    return records[:max_rows], total
 
 
 def pick_font(candidates, size):
