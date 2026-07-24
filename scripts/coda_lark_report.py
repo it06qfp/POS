@@ -785,6 +785,7 @@ REPORTS = [
         "overdue_fn": overdue_by_crd_edit_or_original,
         "wrap_key": "ProdName",
         "out_path": "pos_daily_grouped.png",
+        "no_cap": True,
     },
     {
         "table_id": TABLE_ID_PROD_QUEUE,
@@ -814,6 +815,7 @@ REPORTS = [
         "overdue_fn": overdue_by_crd,
         "wrap_key": "ProdName",
         "out_path": "pos_prod_queue_grouped.png",
+        "no_cap": True,
     },
     {
         "table_id": TABLE_ID_OP_PDPU,
@@ -839,6 +841,7 @@ REPORTS = [
         "overdue_fn": overdue_by_crd_edit_or_original,
         "wrap_key": "ProdName",
         "out_path": "pos_hold_cancel_grouped.png",
+        "no_cap": True,
     },
 ]
 
@@ -865,7 +868,10 @@ def build_reports():
             group_spec, report.get("sort_keys", []), report.get("custom_sort_fn"), report.get("overdue_fn"),
         )
         print(f"{len(records)} rows match filter ({report['filter_desc']})")
-        records, total_count = cap_records(records)
+        if report.get("no_cap"):
+            total_count = len(records)
+        else:
+            records, total_count = cap_records(records)
         if len(records) < total_count:
             print(f"::warning::Capped image to {len(records)}/{total_count} rows for {report['title']}")
         render_image(
