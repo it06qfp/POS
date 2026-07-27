@@ -448,7 +448,8 @@ DEFAULT_THEME = {"navy": (30, 41, 90), "header_bg": (37, 58, 138), "group_bg": (
 
 
 def render_image(records, out_path, title, columns, headers_th, col_widths, group_spec,
-                 wrap_key=None, theme=None, total_count=None, level0_color_fn=None, num_keys=frozenset()):
+                 wrap_key=None, theme=None, total_count=None, level0_color_fn=None, num_keys=frozenset(),
+                 header_text=None):
     theme = {**DEFAULT_THEME, **(theme or {})}
     total_count = len(records) if total_count is None else total_count
     grouped = bool(group_spec)
@@ -517,6 +518,9 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     draw = ImageDraw.Draw(img)
 
     draw.text((margin, title_area_h / 2), title, font=font_title, fill=NAVY, anchor="lm")
+    if header_text:
+        font_header_text = pick_font(FONT_REGULAR_CANDIDATES, 12)
+        draw.text((canvas_width - margin, title_area_h / 2), header_text, font=font_header_text, fill=(110, 110, 120), anchor="rm")
 
     table_top, table_left = title_area_h, margin
 
@@ -636,45 +640,6 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     draw.text((table_left, footer_y), footer_text, font=font_footer, fill=footer_fill)
 
     img.save(out_path)
-
-
-def combine_images(image_paths, out_path, header_text=None, gap=24):
-    """Stack report images vertically into a single image for one combined Lark message.
-
-    Each report has a different column count/widths, so their canvases aren't the
-    same width. Scale every image proportionally to the widest one instead of just
-    left-pasting them, so the combined image has one consistent table width.
-
-    header_text, if given, is drawn once at the top-right corner (date + which
-    daily round -- 08:00/18:00) instead of repeating it under every table title.
-    """
-    imgs = [Image.open(p) for p in image_paths]
-    target_width = max(img.width for img in imgs)
-
-    resized = []
-    for img in imgs:
-        if img.width != target_width:
-            scale = target_width / img.width
-            img = img.resize((target_width, round(img.height * scale)), Image.LANCZOS)
-        resized.append(img)
-
-    margin = 30
-    header_h = 40 if header_text else 0
-    height = header_h + sum(img.height for img in resized) + gap * (len(resized) - 1)
-    combined = Image.new("RGB", (target_width, height), "white")
-
-    if header_text:
-        draw = ImageDraw.Draw(combined)
-        font = pick_font(FONT_REGULAR_CANDIDATES, 12)
-        tw = draw.textlength(header_text, font=font)
-        draw.text((target_width - margin - tw, header_h / 2), header_text, font=font, fill=(110, 110, 120), anchor="lm")
-
-    y = header_h
-    for img in resized:
-        combined.paste(img, (0, y))
-        y += img.height + gap
-    combined.save(out_path)
-    return out_path
 
 
 def send_to_lark(image_path, app_id, app_secret, webhook_url):
@@ -859,6 +824,7 @@ def build_reports():
         raw_rows_by_table[table_id] = fetch_rows(table_id, list(cols))
         print(f"Fetched {len(raw_rows_by_table[table_id])} raw rows from Coda table {table_id}")
 
+    round_label = report_round_label()
     for report in REPORTS:
         print(f"--- {report['title']} (table {report['table_id']}) ---")
         group_spec = report.get("group_spec")
@@ -878,20 +844,16 @@ def build_reports():
             records, report["out_path"], report["title"],
             report["columns"], report["headers"], report["col_widths"], group_spec,
             report["wrap_key"], report.get("theme"), total_count, report.get("level0_color_fn"),
-            report["num_keys"],
+            report["num_keys"], header_text=round_label,
         )
         print(f"Saved image: {report['out_path']}")
 
-    combined_path = combine_images(
-        [report["out_path"] for report in REPORTS], "pos_all_reports_combined.png", report_round_label(),
-    )
-    print(f"Combined all {len(REPORTS)} reports into: {combined_path}")
-    return combined_path
+    return [report["out_path"] for report in REPORTS]
 
 
 def main():
     try:
-        combined_path = build_reports()
+        image_paths = build_reports()
     except Exception as exc:
         print(f"::error::Failed to build POS Daily report: {exc}")
         send_alert(f"🔴 POS Daily Report: สร้างรายงานไม่สำเร็จ\n{exc}")
@@ -899,12 +861,17 @@ def main():
 
     failures = []
     for bot in LARK_BOTS:
-        try:
-            send_to_lark(combined_path, bot["app_id"], bot["app_secret"], bot["webhook_url"])
-            print(f"Sent to Lark ({bot['label']})")
-        except Exception as exc:
-            print(f"::error::Failed to send to Lark bot '{bot['label']}': {exc}")
-            failures.append(f"{bot['label']}: {exc}")
+        bot_failures = []
+        for path in image_paths:
+            try:
+                send_to_lark(path, bot["app_id"], bot["app_secret"], bot["webhook_url"])
+            except Exception as exc:
+                print(f"::error::Failed to send {path} to Lark bot '{bot['label']}': {exc}")
+                bot_failures.append(f"{os.path.basename(path)}: {exc}")
+        if bot_failures:
+            failures.append(f"{bot['label']}: " + "; ".join(bot_failures))
+        else:
+            print(f"Sent to Lark ({bot['label']}) - {len(image_paths)} messages")
 
     if failures:
         detail = "\n".join(f"- {f}" for f in failures)
