@@ -1,0 +1,66 @@
+name: Find Lark Chat IDs
+
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - feature/lark-report-threads
+    paths:
+      - .github/workflows/find-lark-chat-id.yml
+
+jobs:
+  list-chats:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List Lark chat IDs available to the bot
+        env:
+          LARK_APP_ID: ${{ secrets.LARK_APP_ID }}
+          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          token_response="$(curl --fail-with-body --silent --show-error \
+            --request POST \
+            --header 'Content-Type: application/json; charset=utf-8' \
+            --data "{\"app_id\":\"${LARK_APP_ID}\",\"app_secret\":\"${LARK_APP_SECRET}\"}" \
+            'https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal')"
+
+          token="$(jq --exit-status --raw-output '
+            if .code == 0 then .tenant_access_token else error(.msg // "Unable to get tenant token") end
+          ' <<<"${token_response}")"
+
+          page_token=''
+          found=0
+          while true; do
+            args=(--get --data-urlencode 'page_size=100')
+            if [[ -n "${page_token}" ]]; then
+              args+=(--data-urlencode "page_token=${page_token}")
+            fi
+
+            chats_response="$(curl --fail-with-body --silent --show-error \
+              "${args[@]}" \
+              --header "Authorization: Bearer ${token}" \
+              'https://open.larksuite.com/open-apis/im/v1/chats')"
+
+            jq --exit-status '
+              if .code == 0 then . else error(.msg // "Unable to list chats") end
+            ' >/dev/null <<<"${chats_response}"
+
+            while IFS=$'\t' read -r chat_name chat_id; do
+              [[ -z "${chat_id}" ]] && continue
+              echo "${chat_name} -> ${chat_id}"
+              found=1
+            done < <(jq --raw-output '.data.items[]? | [.name, .chat_id] | @tsv' <<<"${chats_response}")
+
+            has_more="$(jq --raw-output '.data.has_more // false' <<<"${chats_response}")"
+            page_token="$(jq --raw-output '.data.page_token // empty' <<<"${chats_response}")"
+            [[ "${has_more}" == 'true' && -n "${page_token}" ]] || break
+          done
+
+          if [[ "${found}" -eq 0 ]]; then
+            echo '::error::No chats were returned. Publish the app and add its bot to the target group, then run this workflow again.'
+            exit 1
+          fi
+
+          echo '::notice::Copy the oc_... value for the target group into the LARK_CHAT_ID repository secret.'

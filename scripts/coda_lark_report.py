@@ -4,8 +4,8 @@ POS Daily Lark report.
 
 Pulls rows from Coda tables, each filtered to a different subset of
 in-progress work, renders a grouped table image per report (merged group
-cells, wrapped product names), and posts each image to a Lark group via
-incoming webhook, in this order:
+cells, wrapped product names), posts a date message to a Lark group,
+and replies with each image in its thread, in this order:
 
   1. รายการลงผลิตใหม่ รอเลือก PD/PU -- master DO-Shipment table
      (grid-lV1uGeGQl2) filtered to rows where Status_DO-Shipment = "OP เลือก PD/PU".
@@ -31,24 +31,25 @@ from PIL import Image, ImageDraw, ImageFont
 CODA_API_TOKEN = os.environ["CODA_API_TOKEN"]
 LARK_APP_ID = os.environ["LARK_APP_ID"]
 LARK_APP_SECRET = os.environ["LARK_APP_SECRET"]
-LARK_WEBHOOK_URL = os.environ["LARK_WEBHOOK_URL"]
+LARK_CHAT_ID = os.environ["LARK_CHAT_ID"]
 
-LARK_BOTS = [{"label": "primary", "app_id": LARK_APP_ID, "app_secret": LARK_APP_SECRET, "webhook_url": LARK_WEBHOOK_URL}]
+LARK_BOTS = [{"label": "primary", "app_id": LARK_APP_ID, "app_secret": LARK_APP_SECRET, "chat_id": LARK_CHAT_ID}]
 _LARK_APP_ID_2 = os.environ.get("LARK_APP_ID_2")
 _LARK_APP_SECRET_2 = os.environ.get("LARK_APP_SECRET_2")
-_LARK_WEBHOOK_URL_2 = os.environ.get("LARK_WEBHOOK_URL_2")
-if _LARK_APP_ID_2 and _LARK_APP_SECRET_2 and _LARK_WEBHOOK_URL_2:
+_LARK_CHAT_ID_2 = os.environ.get("LARK_CHAT_ID_2")
+if any((_LARK_APP_ID_2, _LARK_APP_SECRET_2, _LARK_CHAT_ID_2)) and not all(
+    (_LARK_APP_ID_2, _LARK_APP_SECRET_2, _LARK_CHAT_ID_2)
+):
+    raise RuntimeError(
+        "Set LARK_APP_ID_2, LARK_APP_SECRET_2, and LARK_CHAT_ID_2 together."
+    )
+if _LARK_APP_ID_2:
     LARK_BOTS.append({
-        "label": "secondary", "app_id": _LARK_APP_ID_2, "app_secret": _LARK_APP_SECRET_2, "webhook_url": _LARK_WEBHOOK_URL_2,
+        "label": "secondary", "app_id": _LARK_APP_ID_2, "app_secret": _LARK_APP_SECRET_2, "chat_id": _LARK_CHAT_ID_2,
     })
 
-# บอทแจ้งเตือน -- อยู่ tenant เดียวกับ primary จึงใช้ app credentials ของ primary อัปโหลดรูปได้เลย
-# ได้รับรายงานภาพปกติทุกรอบเหมือน primary/secondary และยังเป็นช่องทางที่ send_alert() ใช้แจ้งข้อความ error ด้วย
+# This webhook is used only for failure alerts; regular reports use Message API threads.
 LARK_ALERT_WEBHOOK_URL = os.environ.get("LARK_ALERT_WEBHOOK_URL")
-if LARK_ALERT_WEBHOOK_URL:
-    LARK_BOTS.append({
-        "label": "alert", "app_id": LARK_APP_ID, "app_secret": LARK_APP_SECRET, "webhook_url": LARK_ALERT_WEBHOOK_URL,
-    })
 
 DOC_ID = os.environ.get("CODA_DOC_ID", "MiXbfRif1m")
 TABLE_ID = os.environ.get("CODA_TABLE_ID", "table-OA56XddNFI")
@@ -642,36 +643,100 @@ def render_image(records, out_path, title, columns, headers_th, col_widths, grou
     img.save(out_path)
 
 
-def send_to_lark(image_path, app_id, app_secret, webhook_url):
+def lark_result(response, description):
+    """Raise a useful error when Lark returns an application-level failure."""
+    response.raise_for_status()
+    result = response.json()
+    if result.get("code") != 0:
+        raise RuntimeError(f"{description}: {result}")
+    return result
+
+
+def get_lark_tenant_token(app_id, app_secret):
     auth_resp = requests.post(
         "https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal",
         json={"app_id": app_id, "app_secret": app_secret},
         timeout=30,
     )
-    auth_resp.raise_for_status()
-    token = auth_resp.json()["tenant_access_token"]
+    result = lark_result(auth_resp, "Cannot get Lark tenant token")
+    try:
+        return result["tenant_access_token"]
+    except KeyError as exc:
+        raise RuntimeError(f"Lark tenant token missing from response: {result}") from exc
 
-    with open(image_path, "rb") as f:
+
+def upload_lark_image(token, image_path):
+    with open(image_path, "rb") as image_file:
         upload_resp = requests.post(
             "https://open.larksuite.com/open-apis/im/v1/images",
             headers={"Authorization": f"Bearer {token}"},
             data={"image_type": "message"},
-            files={"image": (os.path.basename(image_path), f, "image/png")},
+            files={"image": (os.path.basename(image_path), image_file, "image/png")},
             timeout=60,
         )
-    upload_resp.raise_for_status()
-    image_key = upload_resp.json()["data"]["image_key"]
+    result = lark_result(upload_resp, "Lark image upload failed")
+    try:
+        return result["data"]["image_key"]
+    except KeyError as exc:
+        raise RuntimeError(f"Lark image key missing from response: {result}") from exc
 
-    send_resp = requests.post(
-        webhook_url,
-        json={"msg_type": "image", "content": {"image_key": image_key}},
+
+def send_lark_date_message(token, chat_id):
+    report_date = datetime.now(BANGKOK_TZ).strftime("%d/%m/%Y")
+    response = requests.post(
+        "https://open.larksuite.com/open-apis/im/v1/messages",
+        params={"receive_id_type": "chat_id"},
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        json={
+            "receive_id": chat_id,
+            "msg_type": "text",
+            "content": json.dumps(
+                {"text": f"POS Daily Report - {report_date}"},
+                ensure_ascii=False,
+            ),
+        },
         timeout=30,
     )
-    send_resp.raise_for_status()
-    result = send_resp.json()
-    print("SEND_RESP:", json.dumps(result, ensure_ascii=False))
-    if result.get("code") != 0:
-        raise RuntimeError(f"Lark send failed: {result}")
+    result = lark_result(response, "Lark date message failed")
+    try:
+        return result["data"]["message_id"]
+    except KeyError as exc:
+        raise RuntimeError(f"Lark date message ID missing from response: {result}") from exc
+
+
+def reply_lark_image(token, parent_message_id, image_key):
+    response = requests.post(
+        f"https://open.larksuite.com/open-apis/im/v1/messages/{parent_message_id}/reply",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json; charset=utf-8",
+        },
+        json={
+            "msg_type": "image",
+            "content": json.dumps({"image_key": image_key}),
+            "reply_in_thread": True,
+        },
+        timeout=30,
+    )
+    result = lark_result(response, "Lark image reply failed")
+    try:
+        return result["data"]["message_id"]
+    except KeyError as exc:
+        raise RuntimeError(f"Lark reply message ID missing from response: {result}") from exc
+
+
+def send_report_thread(image_paths, app_id, app_secret, chat_id):
+    token = get_lark_tenant_token(app_id, app_secret)
+    parent_message_id = send_lark_date_message(token, chat_id)
+    print(f"Created POS Daily report thread: {parent_message_id}")
+
+    for image_path in image_paths:
+        image_key = upload_lark_image(token, image_path)
+        reply_message_id = reply_lark_image(token, parent_message_id, image_key)
+        print(f"Sent {os.path.basename(image_path)} as thread reply: {reply_message_id}")
 
 
 def send_alert(message):
@@ -861,17 +926,18 @@ def main():
 
     failures = []
     for bot in LARK_BOTS:
-        bot_failures = []
-        for path in image_paths:
-            try:
-                send_to_lark(path, bot["app_id"], bot["app_secret"], bot["webhook_url"])
-            except Exception as exc:
-                print(f"::error::Failed to send {path} to Lark bot '{bot['label']}': {exc}")
-                bot_failures.append(f"{os.path.basename(path)}: {exc}")
-        if bot_failures:
-            failures.append(f"{bot['label']}: " + "; ".join(bot_failures))
+        try:
+            send_report_thread(
+                image_paths=image_paths,
+                app_id=bot["app_id"],
+                app_secret=bot["app_secret"],
+                chat_id=bot["chat_id"],
+            )
+        except Exception as exc:
+            print(f"::error::Failed to send report thread to Lark bot '{bot['label']}': {exc}")
+            failures.append(f"{bot['label']}: {exc}")
         else:
-            print(f"Sent to Lark ({bot['label']}) - {len(image_paths)} messages")
+            print(f"Sent one POS Daily report thread to Lark ({bot['label']}) with {len(image_paths)} images")
 
     if failures:
         detail = "\n".join(f"- {f}" for f in failures)
