@@ -2,6 +2,11 @@ name: POS Daily Lark Report (Test)
 
 on:
   workflow_dispatch: {}
+  push:
+    branches:
+      - feature/lark-report-threads
+    paths:
+      - .github/workflows/pos-daily-report-test.yml
 
 jobs:
   report:
