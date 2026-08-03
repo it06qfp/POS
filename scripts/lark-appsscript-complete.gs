@@ -530,7 +530,7 @@ function sendImageToLark_(blob, webhookUrl) {
 // weekly ยังมี retry รอ handoff อีก 4 ครั้ง × 20 วิ ก่อน fallback
 // ============================================================================
 
-// รันด้วย trigger 07:35 — สั่ง GitHub Action POS Daily ก่อน (สร้าง thread รูป 1-4)
+// รันด้วย trigger 07:05 — สั่ง GitHub Action POS Daily ก่อน (สร้าง thread รูป 1-4)
 function runScheduledTasks() {
   dispatchReport();
 }

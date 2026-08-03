@@ -995,6 +995,52 @@ def build_reports():
     return [report["out_path"] for report in REPORTS]
 
 
+def stage_images_for_gas(image_paths, stage_dir):
+    """
+    เตรียมรูป + manifest ให้ Apps Script มาดึง (ไม่ต้องมี credential Google ในฝั่ง Actions)
+    workflow จะ force-push โฟลเดอร์นี้เป็น branch daily-images (คอมมิตเดียว ไม่เก็บ history)
+    manifest มี date เพื่อให้ฝั่ง Apps Script ปฏิเสธรูปของวันเก่า (กันโพสต์รูปเมื่อวานซ้ำ)
+    """
+    import shutil
+
+    out = Path(stage_dir)
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob("*.png"):
+        old.unlink()
+
+    files = []
+    for idx, path in enumerate(image_paths, 1):
+        name = f"{idx}_{Path(path).stem}.png"
+        shutil.copyfile(path, out / name)
+        files.append(name)
+
+    now = datetime.now(BANGKOK_TZ)
+    manifest = {
+        "date": now.strftime("%Y-%m-%d"),
+        "generated_at": now.isoformat(timespec="seconds"),
+        "files": files,
+    }
+    (out / "manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+    return manifest
+
+
+def upload_reports_to_drive(image_paths):
+    """
+    อัปรูปรายวันขึ้นโฟลเดอร์รายวันใน Drive ให้ Apps Script มาส่งเป็น thread เดียว
+    ตั้งชื่อ 1_..N_ เพื่อคุมลำดับ (ฝั่ง Apps Script เรียงตามชื่อไฟล์ และใช้ 5_weekly_ ต่อท้าย)
+    คืน list ของ file id; คืน [] ถ้าไม่ได้ตั้ง config Drive (โหมดเดิม)
+    """
+    from drive_upload import upload_images
+
+    images = []
+    for idx, path in enumerate(image_paths, 1):
+        p = Path(path)
+        images.append((f"{idx}_{p.stem}.png", p.read_bytes()))
+    return upload_images(images)
+
+
 def main():
     try:
         image_paths = build_reports()
@@ -1002,6 +1048,33 @@ def main():
         print(f"::error::Failed to build POS Daily report: {exc}")
         send_alert(f"🔴 POS Daily Report: สร้างรายงานไม่สำเร็จ\n{exc}")
         raise
+
+    # โหมดที่ใช้จริง: วางรูป + manifest ให้ workflow push ขึ้น branch daily-images
+    # แล้ว Apps Script (เจ้าของโฟลเดอร์ Drive) ดึงไปเซฟในโฟลเดอร์รายวันและส่ง thread รอบเดียว
+    # ไม่ต้องมี credential Google ใน Actions เลย
+    stage_dir = os.environ.get("POS_STAGE_DIR")
+    if stage_dir and not os.environ.get("POS_KEEP_DIRECT_LARK"):
+        try:
+            manifest = stage_images_for_gas(image_paths, stage_dir)
+        except Exception as exc:
+            print(f"::warning::Staging images failed ({exc}) -> fallback to direct Lark send")
+            send_alert(f"🟠 POS Daily Report: เตรียมรูปให้ Apps Script ไม่สำเร็จ ({exc})\nใช้วิธีส่งเข้า Lark ตรงแทน")
+        else:
+            print(f"Staged {len(manifest['files'])} images for {manifest['date']} at {stage_dir}")
+            return
+
+    # โหมดสำรอง: อัปขึ้น Drive ตรงด้วย service account (ใช้ได้เฉพาะโฟลเดอร์ใน Shared Drive)
+    # ถ้าอัปไม่สำเร็จ → fallback ส่งเข้า Lark ตรงแบบเดิม เพื่อให้รายงานไม่หายไปเงียบ ๆ
+    if not os.environ.get("POS_KEEP_DIRECT_LARK"):
+        try:
+            drive_ids = upload_reports_to_drive(image_paths)
+        except Exception as exc:
+            print(f"::warning::Drive upload failed ({exc}) -> fallback to direct Lark send")
+            send_alert(f"🟠 POS Daily Report: อัปรูปขึ้น Drive ไม่สำเร็จ ({exc})\nใช้วิธีส่งเข้า Lark ตรงแทน")
+        else:
+            if drive_ids:
+                print(f"Uploaded {len(drive_ids)} images to Drive; Apps Script will post the thread")
+                return
 
     failures = []
     for bot in LARK_BOTS:

@@ -39,7 +39,32 @@ jobs:
           # Alert webhook has no _TEST variant; optional (skipped if unset).
           LARK_ALERT_WEBHOOK_URL: ${{ secrets.LARK_ALERT_WEBHOOK_URL }}
           LARK_EXTERNAL_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL_TEST }}
+          # โหมดที่ใช้จริง: วางรูป + manifest.json ไว้ที่ images/ แล้ว step ถัดไป push
+          # ขึ้น branch daily-images ให้ Apps Script ดึงไปเซฟใน Drive และส่ง thread เอง
+          POS_STAGE_DIR: images
+          # โหมดสำรอง (ถ้าวันหลังย้ายโฟลเดอร์ไป Shared Drive แล้วอยากให้ Action อัป Drive ตรง)
+          GDRIVE_SERVICE_ACCOUNT_JSON: ${{ secrets.GDRIVE_SERVICE_ACCOUNT_JSON }}
+          GDRIVE_PARENT_FOLDER_ID: ${{ secrets.GDRIVE_PARENT_FOLDER_ID }}
         run: python scripts/coda_lark_report.py
+
+      - name: Publish images to branch daily-images (for Apps Script)
+        if: hashFiles('images/manifest.json') != ''
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat images/manifest.json
+          # git init ใหม่ในโฟลเดอร์ images แล้ว force-push เป็นคอมมิตเดียว
+          # → branch นี้ไม่มี history สะสม ขนาด repo ไม่บวมแม้รันทุกวัน
+          cd images
+          git init -q -b daily-images
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -qm "POS daily images $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push -q --force \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            daily-images:refs/heads/daily-images
+          echo "pushed $(ls *.png | wc -l) images to branch daily-images"
 
       - name: Commit latest Lark thread metadata
         env:
