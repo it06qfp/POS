@@ -1,1 +1,4 @@
 scripts/__pycache__/
+# รูปที่ render ตอนรัน + โฟลเดอร์ staging ที่ push ขึ้น branch daily-images (ไม่เก็บใน main)
+*.png
+images/

@@ -1,2 +1,5 @@
 requests>=2.31
 Pillow>=10.0
+# อัปรูปขึ้น Google Drive (โฟลเดอร์รายวัน) — ใช้เมื่อตั้ง GDRIVE_* secrets
+google-api-python-client>=2.120
+google-auth>=2.28
