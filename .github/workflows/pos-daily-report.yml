@@ -1,9 +1,14 @@
 name: POS Daily Lark Report
 
 on:
-  schedule:
-    - cron: '0 1 * * *'        # 01:00 UTC = 08:00 Asia/Bangkok
+  # ไม่ใช้ schedule cron แล้ว: Apps Script trigger (dispatchReport 07:05 จันทร์-เสาร์)
+  # เป็นตัวสั่งงานตัวเดียว ถ้าเปิด cron 08:00 ด้วยจะได้รายงานซ้ำ 2 ชุด/วัน
+  # และมีรายงานวันอาทิตย์ที่ไม่ต้องการ (cron ไม่รู้จักวันหยุด)
   workflow_dispatch: {}
+
+concurrency:
+  group: pos-daily-report
+  cancel-in-progress: false
 
 jobs:
   report:
@@ -48,4 +53,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add latest_thread.json
           git commit -m "chore: update latest Lark thread"
-          git push
+          # ถ้า main ขยับระหว่างรัน ให้ rebase แล้ว push ใหม่ (handoff นี้ห้ามพลาด
+          # ไม่งั้น Apps Script จะอ่านค่าเก่าแล้วไปสร้าง thread แยก)
+          git push || { git pull --rebase --autostash && git push; }

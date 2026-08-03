@@ -10,6 +10,11 @@
 // Script Properties ที่ต้องตั้ง:
 //   LARK_APP_ID, LARK_APP_SECRET, GH_TOKEN          (มีอยู่แล้ว)
 //   LARK_CHAT_ID = oc_837485ee2882cf4c9b0f6e8e06c872c3   (เทสโต้ — เพิ่มใหม่)
+//   Test_BOT_Webhook = webhook ของ bot "Test POS"        (card ฝั่ง external)
+//   WEEKLY_LARK_WEBHOOK_URL = webhook เดิม               (เฉพาะถ้าจะใช้ sendImageToLark_)
+//
+// GH_TOKEN ต้องมีสิทธิ์ contents:read ด้วย (ไม่ใช่แค่ actions:write)
+// เพราะ findPosDailyThreadRoot_() อ่าน latest_thread.json ผ่าน GitHub contents API
 // ============================================================================
 
 const OWNER = 'it06qfp';
@@ -21,11 +26,9 @@ const WEEKLY_SHEET_ID = '12cIDbt13wPfxqOCkX4l3x6O5wbudoB4KixycF1TgSX0';
 const WEEKLY_SHEET_GID = 0;
 const WEEKLY_SHEET_RANGE = 'B2:L14';
 const WEEKLY_REPORT_TITLE = 'รายงานแผนการรับงานผลิตได้ประจำสัปดาห์ PD';
-//ห้องเทส
-//const WEEKLY_LARK_WEBHOOK_URL = 'https://open.larksuite.com/open-apis/bot/v2/hook/061e50e0-93f9-415a-8600-e3d6ea8c2f81';
-
-//ห้องจริง//
-const WEEKLY_LARK_WEBHOOK_URL = 'https://open.larksuite.com/open-apis/bot/v2/hook/10a1ad78-3f8f-4cff-be9a-1deed4661ab0';
+// webhook เดิม (ส่งรูปตรงเข้าห้อง ไม่ผ่าน thread) — ย้ายไปเก็บใน Script Property
+// ชื่อ WEEKLY_LARK_WEBHOOK_URL แล้ว: repo นี้เป็น public repo ห้าม hardcode URL webhook
+// เพราะใครก็โพสต์เข้าห้องได้ถ้ารู้ URL (ดู getWeeklyWebhook_())
 const WEEKLY_NARROW_COLUMNS = ['วันที่(เริ่ม)', 'วันที่(ท้าย)'];
 const WEEKLY_WIDE_COLUMNS = ['พิมพ์ม้วน P1', 'พิมพ์ม้วน P3-4', 'พิมพ์ใบ P2', 'ตัด 1-2-3-4-5', 'วนปาก', 'แพ็ค'];
 
@@ -39,6 +42,13 @@ const LARK_API_BASE = 'https://open.larksuite.com/open-apis';
 function getExternalWebhook_() {
   const url = PropertiesService.getScriptProperties().getProperty('Test_BOT_Webhook');
   if (!url) throw new Error('ยังไม่ได้ตั้ง Script Property ชื่อ Test_BOT_Webhook');
+  return url;
+}
+
+/** webhook เดิม (ใช้กับ sendImageToLark_ เท่านั้น) — อ่านจาก Script Property */
+function getWeeklyWebhook_() {
+  const url = PropertiesService.getScriptProperties().getProperty('WEEKLY_LARK_WEBHOOK_URL');
+  if (!url) throw new Error('ยังไม่ได้ตั้ง Script Property ชื่อ WEEKLY_LARK_WEBHOOK_URL');
   return url;
 }
 
@@ -86,23 +96,68 @@ function sendWeeklyReportToLark_(blob) {
  */
 function findPosDailyThreadRoot_() {
   const todayLabel = Utilities.formatDate(new Date(), 'Asia/Bangkok', 'dd/MM/yyyy');
-  const url = 'https://raw.githubusercontent.com/it06qfp/POS/main/latest_thread.json';
 
-  // Read the GitHub Actions handoff because tenant_access_token cannot read chat history.
+  // รอ handoff จาก GitHub Actions ได้สูงสุด 3 ครั้ง × 20 วิ = 60 วิ
+  // (งานหนัก render+upload จบไปแล้วก่อนถึงจุดนี้ → 60 วิ ยังห่างจากเพดาน 6 นาทีของ GAS)
+  for (let attempt = 1; attempt <= 4; attempt++) {
+    const thread = readLatestThreadJson_();
+    if (thread && thread.root_message_id && thread.date === todayLabel) {
+      return thread.root_message_id;
+    }
+    const why = !thread ? 'อ่าน latest_thread.json ไม่ได้'
+      : (thread.date !== todayLabel ? 'ข้อมูลเป็นของวันที่ ' + thread.date + ' (ไม่ใช่ ' + todayLabel + ')'
+        : 'ไม่มี root_message_id');
+    if (attempt < 4) {
+      console.log(why + ' → รออีก 20 วิ แล้วลองใหม่ (ครั้งที่ ' + attempt + '/4)');
+      Utilities.sleep(20000);
+    } else {
+      console.log(why + ' → เลิกรอ ไปสร้าง thread ใหม่');
+    }
+  }
+  return null;
+}
+
+/**
+ * อ่าน latest_thread.json ที่ GitHub Actions เขียนไว้ (tenant token อ่านประวัติห้องไม่ได้)
+ * ใช้ GitHub contents API เป็นหลัก เพราะ raw.githubusercontent.com มี CDN cache สูงสุด ~5 นาที
+ * ซึ่งทำให้ได้ค่าของเมื่อวานแล้วไปสร้าง thread ใหม่ทั้งที่ thread วันนี้มีอยู่แล้ว
+ * คืน object หรือ null
+ */
+function readLatestThreadJson_() {
+  const token = PropertiesService.getScriptProperties().getProperty('GH_TOKEN');
+  if (token) {
+    try {
+      const apiUrl = 'https://api.github.com/repos/' + OWNER + '/' + REPO
+        + '/contents/latest_thread.json?ref=main';
+      const res = UrlFetchApp.fetch(apiUrl, {
+        headers: {
+          Authorization: 'Bearer ' + token,
+          Accept: 'application/vnd.github.raw',
+          'X-GitHub-Api-Version': '2022-11-28',
+        },
+        muteHttpExceptions: true,
+      });
+      if (res.getResponseCode() === 200) return JSON.parse(res.getContentText());
+      console.log('GitHub contents API ตอบ HTTP ' + res.getResponseCode() + ' → fallback ไป raw');
+    } catch (err) {
+      console.log('GitHub contents API ล้มเหลว: ' + err + ' → fallback ไป raw');
+    }
+  }
+
+  // fallback: raw (อาจได้ค่าเก่าจาก CDN cache — ใช้เมื่อ GH_TOKEN ใช้ไม่ได้)
   try {
-    const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
+    const res = UrlFetchApp.fetch('https://raw.githubusercontent.com/' + OWNER + '/' + REPO
+      + '/main/latest_thread.json', {
+      headers: { 'Cache-Control': 'no-cache' },
+      muteHttpExceptions: true,
+    });
     if (res.getResponseCode() !== 200) {
-      console.log('Cannot read latest_thread.json (HTTP ' + res.getResponseCode() + ') -> creating a new thread');
+      console.log('raw latest_thread.json ตอบ HTTP ' + res.getResponseCode());
       return null;
     }
-    const thread = JSON.parse(res.getContentText());
-    if (thread.date !== todayLabel || !thread.root_message_id) {
-      console.log('latest_thread.json is stale or missing root_message_id -> creating a new thread');
-      return null;
-    }
-    return thread.root_message_id;
+    return JSON.parse(res.getContentText());
   } catch (err) {
-    console.log('Cannot read latest_thread.json: ' + err + ' -> creating a new thread');
+    console.log('อ่าน raw latest_thread.json ไม่ได้: ' + err);
     return null;
   }
 }
@@ -471,7 +526,8 @@ function sendImageToLark_(blob, webhookUrl) {
 //
 // ห้ามเรียก sendWeeklyProductionReport ทันทีหลัง dispatchReport
 // (GH ยังไม่ทันสร้าง thread → จะ fallback สร้าง thread ใหม่ แทนที่จะเป็นรูปที่ 5)
-// ใช้ setupWeekdayTriggersForBoth() ซึ่งแยก trigger 07:35 (dispatch) / 08:05 (weekly)
+// ใช้ setupWeekdayTriggersForBoth() ซึ่งแยก trigger 07:05 (dispatch) / 08:35 (weekly)
+// weekly ยังมี retry รอ handoff อีก 4 ครั้ง × 20 วิ ก่อน fallback
 // ============================================================================
 
 // รันด้วย trigger 07:35 — สั่ง GitHub Action POS Daily ก่อน (สร้าง thread รูป 1-4)
@@ -537,11 +593,15 @@ function testToken() {
 
 
 function setupWeekdayTriggersForBoth() {
-  // dispatchReport 07:35 → GH Action สร้าง thread POS Daily (ใช้เวลา ~5-10 นาที)
-  // sendWeeklyProductionReport 08:05 → หา thread แล้ว reply รูปสัปดาห์ต่อ (รูปที่ 5)
+  // dispatchReport 07:05 → GH Action สร้าง thread POS Daily (ใช้เวลา ~5-10 นาที)
+  // sendWeeklyProductionReport 08:35 → หา thread แล้ว reply รูปสัปดาห์ต่อ (รูปที่ 5)
+  //
+  // สำคัญ: nearMinute() สุ่มเวลาจริงได้ ±15 นาที ดังนั้นคู่ 07:35/08:05 แบบเดิม
+  // อาจยิงชนกัน (07:50 ทั้งคู่) → weekly ไม่เจอ thread แล้วไปสร้าง thread แยก
+  // เว้นห่าง 90 นาที (07:05 → 06:50-07:20, 08:35 → 08:20-08:50) การันตีห่างกัน ≥60 นาที
   const schedule = [
-    { fn: 'dispatchReport', hour: 7, minute: 35 },
-    { fn: 'sendWeeklyProductionReport', hour: 8, minute: 5 },
+    { fn: 'dispatchReport', hour: 7, minute: 5 },
+    { fn: 'sendWeeklyProductionReport', hour: 8, minute: 35 },
   ];
 
   const weekdays = [
