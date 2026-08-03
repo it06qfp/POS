@@ -260,8 +260,9 @@ cap 80 ใบ / card external ใช้รูปแรก / เซฟไฟล�
 - ✅ ลบออกจากไฟล์ทั้งหมดแล้ว (commit `5f107a4`) — grep ทั้ง `WorkSpace\` + `hermes\scripts\` + `HEAD` ของ repo: ไม่เหลือ `bot/v2/hook/` เลย
 - ⚠️ ยังอยู่ใน git history ที่ commit `396ec70` บน GitHub (public) → ลบออกจากไฟล์ **ไม่ช่วย** เพราะใครก็ `git log -p` เอาไปได้
 - 🔴 **ต้องทำใน Lark เอง** (Claude เข้า Lark admin UI ไม่ได้): ห้อง → Settings → Bots → ลบ/สร้าง custom bot ใหม่ แล้วเอา URL ใหม่ไปใส่ Script Property `WEEKLY_LARK_WEBHOOK_URL`
-  - `.../hook/10a1ad78-3f8f-4cff-be9a-1deed4661ab0` (ห้องจริง)
-  - `.../hook/061e50e0-93f9-415a-8600-e3d6ea8c2f81` (ห้องเทส)
+  - `hook/10a1ad78-…` (ห้องจริง) · `hook/061e50e0-…` (ห้องเทส)
+  - ตัด URL เต็มออกจากเอกสารนี้ตั้งใจ — repo เป็น public เอกสารไม่ควรเป็นที่เผยแพร่ซ้ำ
+    ค่าเต็มดูได้จาก git history commit `396ec70` (และนั่นคือเหตุผลที่ต้อง revoke)
 - ทางเลือกเสริม: rewrite history + force-push ให้ URL หายจาก history (ทำได้ แต่ SHA ของ public repo เปลี่ยนทั้งสาย และ fork/cache ที่คนอื่นดึงไปแล้วยังมีอยู่ → revoke สำคัญกว่า)
 
 ## 6. งานที่รออนุมัติ (push ขึ้น main)
