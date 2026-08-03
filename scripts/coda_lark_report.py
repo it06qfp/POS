@@ -740,6 +740,15 @@ def send_report_thread(image_paths, app_id, app_secret, chat_id):
         print(f"Sent {os.path.basename(image_path)} as thread reply: {reply_message_id}")
 
 
+# Short display captions for known report images (fallback: filename stem).
+CAPTION_MAP = {
+    "pos_op_pdpu_grouped.png": "รอเลือก PD/PU",
+    "pos_daily_grouped.png": "POS Daily",
+    "pos_prod_queue_grouped.png": "คิวผลิต",
+    "pos_hold_cancel_grouped.png": "Hold/ยกเลิก",
+}
+
+
 def send_external_card(image_paths, app_id, app_secret, webhook_url):
     """External room (Test BOT): ONE card = text line + small images in a row.
 
@@ -763,7 +772,11 @@ def send_external_card(image_paths, app_id, app_secret, webhook_url):
             el.append({"tag": "markdown", "content": f"**{cap}**"})
         return {"tag": "column", "width": "weighted", "weight": 1, "elements": el}
 
-    captions = [os.path.splitext(os.path.basename(p))[0] for p in image_paths]
+    def short_caption(path):
+        name = os.path.basename(path)
+        return CAPTION_MAP.get(name, os.path.splitext(name)[0])
+
+    captions = [short_caption(p) for p in image_paths]
     report_date = datetime.now(BANGKOK_TZ).strftime("%d/%m/%Y")
     card = {
         "msg_type": "interactive",
