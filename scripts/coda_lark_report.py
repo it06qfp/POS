@@ -24,6 +24,7 @@ import os
 import sys
 import time
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import requests
 from PIL import Image, ImageDraw, ImageFont
@@ -51,6 +52,7 @@ if _LARK_APP_ID_2:
 # This webhook is used only for failure alerts; regular reports use Message API threads.
 LARK_ALERT_WEBHOOK_URL = os.environ.get("LARK_ALERT_WEBHOOK_URL")
 LARK_EXTERNAL_WEBHOOK_URL = os.environ.get("LARK_EXTERNAL_WEBHOOK_URL")
+LATEST_THREAD_PATH = Path(__file__).resolve().parent.parent / "latest_thread.json"
 
 DOC_ID = os.environ.get("CODA_DOC_ID", "MiXbfRif1m")
 TABLE_ID = os.environ.get("CODA_TABLE_ID", "table-OA56XddNFI")
@@ -703,7 +705,11 @@ def send_lark_date_message(token, chat_id):
     )
     result = lark_result(response, "Lark date message failed")
     try:
-        return result["data"]["message_id"]
+        message = result["data"]
+        message_id = message["message_id"]
+        # Lark returns a thread ID for thread-capable messages. For a root
+        # message, its message ID is also a valid thread reply target.
+        return message_id, message.get("thread_id") or message_id
     except KeyError as exc:
         raise RuntimeError(f"Lark date message ID missing from response: {result}") from exc
 
@@ -731,13 +737,28 @@ def reply_lark_image(token, parent_message_id, image_key):
 
 def send_report_thread(image_paths, app_id, app_secret, chat_id):
     token = get_lark_tenant_token(app_id, app_secret)
-    parent_message_id = send_lark_date_message(token, chat_id)
+    parent_message_id, thread_id = send_lark_date_message(token, chat_id)
     print(f"Created POS Daily report thread: {parent_message_id}")
 
     for image_path in image_paths:
         image_key = upload_lark_image(token, image_path)
         reply_message_id = reply_lark_image(token, parent_message_id, image_key)
         print(f"Sent {os.path.basename(image_path)} as thread reply: {reply_message_id}")
+
+    return {
+        "root_message_id": parent_message_id,
+        "thread_id": thread_id,
+        "date": datetime.now(BANGKOK_TZ).strftime("%d/%m/%Y"),
+    }
+
+
+def write_latest_thread(thread):
+    """Persist the primary POS Daily thread for the Apps Script image reply."""
+    LATEST_THREAD_PATH.write_text(
+        json.dumps(thread, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    print(f"Saved latest POS Daily thread metadata: {LATEST_THREAD_PATH}")
 
 
 # Short display captions for known report images (fallback: filename stem).
@@ -985,7 +1006,7 @@ def main():
     failures = []
     for bot in LARK_BOTS:
         try:
-            send_report_thread(
+            thread = send_report_thread(
                 image_paths=image_paths,
                 app_id=bot["app_id"],
                 app_secret=bot["app_secret"],
@@ -995,6 +1016,8 @@ def main():
             print(f"::error::Failed to send report thread to Lark bot '{bot['label']}': {exc}")
             failures.append(f"{bot['label']}: {exc}")
         else:
+            if bot["label"] == "primary":
+                write_latest_thread(thread)
             print(f"Sent one POS Daily report thread to Lark ({bot['label']}) with {len(image_paths)} images")
 
     # External room (Test BOT): one compact card via webhook (optional).

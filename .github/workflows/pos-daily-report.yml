@@ -8,6 +8,8 @@ on:
 jobs:
   report:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -33,3 +35,17 @@ jobs:
           LARK_ALERT_WEBHOOK_URL: ${{ secrets.LARK_ALERT_WEBHOOK_URL }}
           LARK_EXTERNAL_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL_TEST }}
         run: python scripts/coda_lark_report.py
+
+      - name: Commit latest Lark thread metadata
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ -z "$(git status --porcelain -- latest_thread.json)" ]]; then
+            echo "latest_thread.json was not changed"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add latest_thread.json
+          git commit -m "chore: update latest Lark thread"
+          git push
