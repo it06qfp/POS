@@ -1,13 +1,13 @@
 # POS Daily Lark Report (GitHub Actions)
 
 Pulls open rows from the "POS-Daily" Coda table, renders a grouped table
-image, and posts it to a Lark group via webhook — running daily on GitHub
+image, sends a date parent message, then replies to it with report images in a Lark thread — running daily on GitHub
 Actions instead of a local scheduled task.
 
 This is a Python/Pillow rewrite of a PowerShell/System.Drawing script that
 used to run on a Windows machine. Same Coda doc/table/filter/columns/sort,
 same visual layout (merged group cells, wrapped Product Name, alternating
-row colors), same Lark webhook flow.
+row colors), with Lark Message API thread delivery.
 
 ## 1. Create the repo
 
@@ -25,7 +25,7 @@ and add:
 | `CODA_API_TOKEN` | Coda API token | coda.io → Account Settings → API Settings → Generate API token |
 | `LARK_APP_ID` | Lark custom app id | Lark Open Platform → your custom app → Credentials |
 | `LARK_APP_SECRET` | Lark custom app secret | same page as above |
-| `LARK_WEBHOOK_URL` | Full incoming-webhook URL, e.g. `https://open.larksuite.com/open-apis/bot/v2/hook/xxxxxxxx` | The Lark group's bot webhook settings |
+| `LARK_CHAT_ID` | Lark group chat ID, e.g. `oc_xxxxxxxxxxxxxxxxx` | Open the target group's details and copy its chat ID; the app bot must be in the group |
 
 The doc ID (`MiXbfRif1m`) and table ID (`table-OA56XddNFI`) are not secret —
 they're hardcoded defaults in `scripts/coda_lark_report.py`, but can be
@@ -51,7 +51,7 @@ also trigger it manually from the Actions tab (`workflow_dispatch`).
   the script fetches all rows (paginated, only the needed columns) and
   filters for blank `รอคุยในที่ประชุม` client-side in Python — same result,
   just done locally instead of server-side.
-- **Secrets**: Coda token and Lark app secret are read from environment
+- **Secrets**: Coda token, Lark app credentials, and chat ID are read from environment
   variables backed by GitHub Actions secrets, never hardcoded.
 
 ## 5. Files

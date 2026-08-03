@@ -1,9 +1,12 @@
-name: POS Daily Lark Report
+name: POS Daily Lark Report (Test)
 
 on:
-  schedule:
-    - cron: '0 1 * * *'        # 01:00 UTC = 08:00 Asia/Bangkok
   workflow_dispatch: {}
+  push:
+    branches:
+      - feature/lark-report-threads
+    paths:
+      - .github/workflows/pos-daily-report-test.yml
 
 jobs:
   report:
@@ -22,14 +25,10 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      - name: Run POS Daily report (TEST secrets only)
+      - name: Run POS Daily report with the test bot
         env:
-          # CODA token has no _TEST variant in the repo; uses the existing one.
           CODA_API_TOKEN: ${{ secrets.CODA_API_TOKEN }}
           LARK_APP_ID: ${{ secrets.APP_ID_TEST }}
           LARK_APP_SECRET: ${{ secrets.APP_SECRET_TEST }}
           LARK_CHAT_ID: ${{ secrets.LARK_CHAT_ID_TEST }}
-          # Alert webhook has no _TEST variant; optional (skipped if unset).
-          LARK_ALERT_WEBHOOK_URL: ${{ secrets.LARK_ALERT_WEBHOOK_URL }}
-          LARK_EXTERNAL_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL_TEST }}
         run: python scripts/coda_lark_report.py
