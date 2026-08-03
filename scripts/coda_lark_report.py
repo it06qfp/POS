@@ -50,6 +50,7 @@ if _LARK_APP_ID_2:
 
 # This webhook is used only for failure alerts; regular reports use Message API threads.
 LARK_ALERT_WEBHOOK_URL = os.environ.get("LARK_ALERT_WEBHOOK_URL")
+LARK_EXTERNAL_WEBHOOK_URL = os.environ.get("LARK_EXTERNAL_WEBHOOK_URL")
 
 DOC_ID = os.environ.get("CODA_DOC_ID", "MiXbfRif1m")
 TABLE_ID = os.environ.get("CODA_TABLE_ID", "table-OA56XddNFI")
@@ -739,6 +740,50 @@ def send_report_thread(image_paths, app_id, app_secret, chat_id):
         print(f"Sent {os.path.basename(image_path)} as thread reply: {reply_message_id}")
 
 
+def send_external_card(image_paths, app_id, app_secret, webhook_url):
+    """External room (Test BOT): ONE card = text line + small images in a row.
+
+    External groups cannot receive API messages from this tenant (230027), so
+    delivery goes through the custom-bot webhook. All images are uploaded with
+    the tenant token, then embedded in a single interactive card with
+    click-to-enlarge (preview) thumbnails — one message, not several.
+    """
+    token = get_lark_tenant_token(app_id, app_secret)
+    keys = []
+    for image_path in image_paths:
+        image_key = upload_lark_image(token, image_path)
+        keys.append(image_key)
+        print(f"Uploaded {os.path.basename(image_path)} for external card: {image_key}")
+
+    def cell(key, cap):
+        el = [{"tag": "img", "img_key": key,
+               "alt": {"tag": "plain_text", "content": cap or ""},
+               "mode": "small", "preview": True}]
+        if cap:
+            el.append({"tag": "markdown", "content": f"**{cap}**"})
+        return {"tag": "column", "width": "weighted", "weight": 1, "elements": el}
+
+    captions = [os.path.splitext(os.path.basename(p))[0] for p in image_paths]
+    report_date = datetime.now(BANGKOK_TZ).strftime("%d/%m/%Y")
+    card = {
+        "msg_type": "interactive",
+        "card": {
+            "schema": "2.0",
+            "header": {"title": {"tag": "plain_text", "content": "📦 POS Daily Report"},
+                       "template": "blue"},
+            "body": {"direction": "vertical", "elements": [
+                {"tag": "markdown", "content": f"📦 POS Daily Report - {report_date}"},
+                {"tag": "column_set", "flex_mode": "none", "background_style": "default",
+                 "columns": [cell(k, captions[idx] if idx < len(captions) else f"รูป {idx+1}")
+                             for idx, k in enumerate(keys)]},
+            ]},
+        },
+    }
+    response = requests.post(webhook_url, json=card, timeout=30)
+    result = lark_result(response, "Lark external card failed")
+    print(f"Sent external card to webhook with {len(keys)} images")
+
+
 def send_alert(message):
     """ส่งข้อความแจ้งเตือนไปยังบอทแจ้งเตือน (คนละบอทกับที่ส่งรายงาน) เมื่อรายงานสร้าง/ส่งไม่สำเร็จ."""
     if not LARK_ALERT_WEBHOOK_URL:
@@ -938,6 +983,21 @@ def main():
             failures.append(f"{bot['label']}: {exc}")
         else:
             print(f"Sent one POS Daily report thread to Lark ({bot['label']}) with {len(image_paths)} images")
+
+    # External room (Test BOT): one compact card via webhook (optional).
+    if LARK_EXTERNAL_WEBHOOK_URL:
+        try:
+            send_external_card(
+                image_paths=image_paths,
+                app_id=LARK_APP_ID,
+                app_secret=LARK_APP_SECRET,
+                webhook_url=LARK_EXTERNAL_WEBHOOK_URL,
+            )
+        except Exception as exc:
+            print(f"::error::Failed to send external card: {exc}")
+            failures.append(f"external: {exc}")
+        else:
+            print("Sent external card to Test BOT")
 
     if failures:
         detail = "\n".join(f"- {f}" for f in failures)
