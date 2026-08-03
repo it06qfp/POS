@@ -24,10 +24,12 @@ jobs:
 
       - name: Run POS Daily report (TEST secrets only)
         env:
-          CODA_API_TOKEN: ${{ secrets.CODA_API_TOKEN_TEST }}
-          LARK_APP_ID: ${{ secrets.LARK_APP_ID_TEST }}
-          LARK_APP_SECRET: ${{ secrets.LARK_APP_SECRET_TEST }}
+          # CODA token has no _TEST variant in the repo; uses the existing one.
+          CODA_API_TOKEN: ${{ secrets.CODA_API_TOKEN }}
+          LARK_APP_ID: ${{ secrets.APP_ID_TEST }}
+          LARK_APP_SECRET: ${{ secrets.APP_SECRET_TEST }}
           LARK_CHAT_ID: ${{ secrets.LARK_CHAT_ID_TEST }}
-          LARK_ALERT_WEBHOOK_URL: ${{ secrets.LARK_ALERT_WEBHOOK_URL_TEST }}
-          LARK_EXTERNAL_WEBHOOK_URL: ${{ secrets.LARK_EXTERNAL_WEBHOOK_URL_TEST }}
+          # Alert webhook has no _TEST variant; optional (skipped if unset).
+          LARK_ALERT_WEBHOOK_URL: ${{ secrets.LARK_ALERT_WEBHOOK_URL }}
+          LARK_EXTERNAL_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL_TEST }}
         run: python scripts/coda_lark_report.py
