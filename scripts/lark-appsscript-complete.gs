@@ -203,7 +203,7 @@ function sendCardToExternal_(webhookUrl, text, imageKey) {
     msg_type: 'interactive',
     card: {
       schema: '2.0',
-      header: { title: { tag: 'plain_text', content: '📦 ' + WEEKLY_REPORT_TITLE }, template: 'blue' },
+      header: { title: { tag: 'plain_text', content: '📦 รายงาน POS Daily / แผนการรับงานผลิตได้ประจำสัปดาห์ PD' }, template: 'blue' },
       body: {
         direction: 'vertical',
         elements: [
