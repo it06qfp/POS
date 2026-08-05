@@ -1,13 +1,63 @@
-# POS Daily Lark Report (GitHub Actions)
+# POS Daily Lark Report
 
-Pulls open rows from the "POS-Daily" Coda table, renders a grouped table
-image, sends a date parent message, then replies to it with report images in a Lark thread — running daily on GitHub
-Actions instead of a local scheduled task.
+Pulls open rows from the "POS-Daily" Coda table, renders report images, and
+delivers them to Lark as a threaded set of images (internal room) plus a
+single summary card (external room). The pipeline spans two runtimes:
 
-This is a Python/Pillow rewrite of a PowerShell/System.Drawing script that
-used to run on a Windows machine. Same Coda doc/table/filter/columns/sort,
-same visual layout (merged group cells, wrapped Product Name, alternating
-row colors), with Lark Message API thread delivery.
+- **GitHub Actions (Python)** — pulls Coda data, renders images 1-4, pushes
+  them to the `daily-images` branch.
+- **Google Apps Script** — pulls those images into Google Drive, renders the
+  weekly production-plan image (image 5), posts the full set as a Lark
+  thread, and sends one summary card to an external Lark room via webhook.
+
+This started as a Python/Pillow rewrite of a PowerShell/`System.Drawing`
+script that used to run on a Windows machine (same Coda doc/table/filter/
+columns/sort, same visual layout), and has since grown the Apps Script +
+Drive layer described below.
+
+## Architecture / pipeline
+
+1. **`scripts/coda_lark_report.py`** (GitHub Actions, cron `0 1 * * *` =
+   08:00 Asia/Bangkok) — fetches open POS-Daily rows from Coda, renders the
+   grouped table images (1-4), and pushes them plus `manifest.json` to the
+   `daily-images` branch (not `main`).
+2. **`scripts/lark-drive-thread.gs`** (Apps Script, triggered ~08:30
+   Mon-Sat via `runDailyLarkPost()`):
+   - `pullActionImagesToDrive_()` reads `manifest.json` from the
+     `daily-images` branch and saves images 1-4 into today's Drive folder
+     (`Lark - POS - Report/yyyy-MM-dd/`).
+   - `saveWeeklyImageToDrive()` renders the weekly production-plan image
+     (image 5) via `renderWeeklyReportImage_()` (shared helper, see below)
+     and saves it into the same folder.
+   - `sendTodayFolderToLark()` creates one Lark thread (internal room,
+     `LARK_CHAT_ID`) with all images in the folder, then sends a single
+     summary card to the external room via `Test_BOT_Webhook` (external
+     rooms can't receive threads — a webhook only supports one card).
+3. **`scripts/lark-appsscript-complete.gs`** — shared Lark helpers used by
+   both `.gs` files (`getLarkTenantToken_`, `uploadImageToLark_`,
+   `createThreadRoot_`, `replyImageInThread_`, `sendCardToExternal_`,
+   `renderWeeklyReportImage_`, `readWeeklySheetData_`,
+   `formatBangkokTimestamp_`), plus a standalone weekly-only flow
+   (`sendWeeklyProductionReport()` / `sendWeeklyReportToLark_()`) kept as an
+   alternate/fallback trigger path that posts the weekly image on its own
+   instead of via the Drive-folder flow.
+
+Both `.gs` files must live in the **same Apps Script project** — 
+`lark-drive-thread.gs` calls helpers defined in `lark-appsscript-complete.gs`
+directly (no imports in Apps Script; everything in one project shares scope).
+
+### External card title
+
+The card sent to the external Lark room gets its header from
+`sendCardToExternal_()` in `scripts/lark-appsscript-complete.gs`:
+
+```javascript
+header: { title: { tag: 'plain_text', content: '📦 รายงาน POS Daily / แผนการรับงานผลิตได้ประจำสัปดาห์ PD' }, template: 'blue' },
+```
+
+Edit that line directly to change the card title — it's independent of
+`WEEKLY_REPORT_TITLE` (which still drives the Lark thread's root message
+text and the title printed inside the rendered weekly image).
 
 ## 1. Create the repo
 
@@ -15,7 +65,7 @@ Push this folder's contents to the root of a new GitHub repository (keep
 `.github/workflows/pos-daily-report.yml` at that exact path — GitHub Actions
 only looks for workflow files there).
 
-## 2. Add repo secrets
+## 2. Add repo secrets (GitHub Actions side)
 
 Go to **Settings → Secrets and variables → Actions → New repository secret**
 and add:
@@ -32,11 +82,19 @@ they're hardcoded defaults in `scripts/coda_lark_report.py`, but can be
 overridden with optional `CODA_DOC_ID` / `CODA_TABLE_ID` secrets or repo
 variables if you ever point this at a different doc/table.
 
-## 3. Schedule
+## 3. Apps Script Properties (Apps Script side, separate from GitHub secrets)
 
-`.github/workflows/pos-daily-report.yml` runs on cron `0 1 * * *` (01:00 UTC
-= 08:00 Asia/Bangkok). Edit the cron expression to change the time. You can
-also trigger it manually from the Actions tab (`workflow_dispatch`).
+Set these under the Apps Script project's **Project Settings → Script
+Properties** (not GitHub secrets — Apps Script can't read those):
+
+| Property | Value |
+|---|---|
+| `LARK_APP_ID`, `LARK_APP_SECRET` | same Lark custom app as above |
+| `GH_TOKEN` | classic PAT with `repo`/`contents:read` scope — reads `manifest.json` / images from the `daily-images` branch |
+| `LARK_CHAT_ID` | internal room for the daily thread (defaults to the `เทสโต้` room hardcoded in `lark-appsscript-complete.gs` if unset) |
+| `DRIVE_IMAGES_FOLDER_ID` | parent Drive folder ("Lark - POS - Report"); falls back to a hardcoded default if unset |
+| `Test_BOT_Webhook` | webhook URL for the external room's summary card |
+| `WEEKLY_LARK_WEBHOOK_URL` | legacy webhook, only used by the old `sendImageToLark_()` fallback |
 
 ## 4. What changed vs. the original PowerShell version
 
@@ -51,19 +109,37 @@ also trigger it manually from the Actions tab (`workflow_dispatch`).
   the script fetches all rows (paginated, only the needed columns) and
   filters for blank `รอคุยในที่ประชุม` client-side in Python — same result,
   just done locally instead of server-side.
-- **Secrets**: Coda token, Lark app credentials, and chat ID are read from environment
-  variables backed by GitHub Actions secrets, never hardcoded.
+- **Secrets**: Coda token, Lark app credentials, and chat ID are read from
+  environment variables backed by GitHub Actions secrets, never hardcoded.
+- **Delivery**: images no longer go straight to a webhook. GitHub Actions
+  hands off to Google Drive + Apps Script (`lark-drive-thread.gs`), which
+  adds the weekly production-plan image and posts everything as one Lark
+  thread, plus a single external-room summary card.
 
 ## 5. Files
 
 ```
-.github/workflows/pos-daily-report.yml   # schedule + job definition
-scripts/coda_lark_report.py              # fetch -> render -> send
-requirements.txt                         # requests, Pillow
+.github/workflows/pos-daily-report.yml        # cron + manual dispatch: runs coda_lark_report.py
+.github/workflows/pos-daily-report-test.yml   # manual test run
+.github/workflows/find-lark-chat-id.yml       # one-off helper to look up a Lark chat_id
+scripts/coda_lark_report.py                   # Coda -> Pillow images 1-4 -> daily-images branch
+scripts/drive_upload.py                       # Drive upload helpers (service account), used if uploading from Python
+scripts/drive_check.py                        # pre-flight check: confirms the service account can write to the Shared Drive folder
+scripts/lark-appsscript-complete.gs           # shared Lark helpers + standalone weekly-report flow
+scripts/lark-drive-thread.gs                  # main daily flow: Drive folder -> Lark thread -> external card
+scripts/tests/                                # test scripts
+requirements.txt                              # requests, Pillow
+latest_thread.json                            # written by GitHub Actions; read by the legacy thread-lookup path in lark-appsscript-complete.gs
+POS-LARK-HANDOFF.md                           # full handoff notes (setup history, troubleshooting, design decisions)
 ```
+
+For the detailed history of design decisions and troubleshooting notes, see
+**[POS-LARK-HANDOFF.md](./POS-LARK-HANDOFF.md)**.
 
 ## 6. Testing before relying on the schedule
 
 Push the repo, add the secrets, then run the workflow manually once from the
-**Actions** tab ("Run workflow") and check the Lark group for the image
-before trusting the daily cron.
+**Actions** tab ("Run workflow") and check the `daily-images` branch for the
+new images/manifest. Then run `runDailyLarkPost()` manually from the Apps
+Script editor and check both the internal Lark room (thread with all images)
+and the external room (summary card) before trusting the daily triggers.
