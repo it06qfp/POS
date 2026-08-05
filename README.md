@@ -1,188 +1,210 @@
 # POS Daily Lark Report
 
-Pulls open rows from the "POS-Daily" Coda table, renders report images, and
-delivers them to Lark as a threaded set of images (internal room) plus a
-single summary card (external room). The pipeline spans two runtimes:
+ดึงแถวที่ยังเปิดอยู่จากตาราง Coda "POS-Daily" มาสร้างรูปรายงาน แล้วส่งเข้า Lark
+เป็น thread รูปภาพ (ห้อง internal) พร้อม card สรุปใบเดียว (ห้อง external)
+pipeline นี้แบ่งเป็น 2 runtime:
 
-- **GitHub Actions (Python)** — pulls Coda data, renders images 1-4, stages
-  them (does **not** send to Lark itself — see "Staging mode" below), and
-  pushes them to the `daily-images` branch.
-- **Google Apps Script** — pulls those images into Google Drive, renders the
-  weekly production-plan image (image 5), posts the full set as a Lark
-  thread, and sends one summary card to an external Lark room via webhook.
-  **This is the only part of the pipeline that actually talks to the Lark
-  API for sending messages.**
+- **GitHub Actions (Python)** — ดึงข้อมูล Coda, render รูป 1-4, เตรียมไฟล์ไว้
+  (**ไม่ได้ส่งเข้า Lark เอง** — ดูหัวข้อ "Staging mode" ด้านล่าง) แล้ว push
+  ขึ้น branch `daily-images`
+- **Google Apps Script** — ดึงรูปพวกนั้นเข้า Google Drive, render รูปแผนการ
+  รับงานผลิตประจำสัปดาห์ (รูปที่ 5), โพสต์รูปทั้งหมดเป็น thread เดียวใน Lark,
+  แล้วส่ง card สรุปใบเดียวเข้าห้อง external ผ่าน webhook
+  **นี่คือส่วนเดียวใน pipeline ที่คุยกับ Lark API เพื่อส่งข้อความจริงๆ**
 
-This started as a Python/Pillow rewrite of a PowerShell/`System.Drawing`
-script that used to run on a Windows machine (same Coda doc/table/filter/
-columns/sort, same visual layout), and has since grown the Apps Script +
-Drive layer described below.
+เดิมโปรเจกต์นี้เป็นการ rewrite สคริปต์ PowerShell/`System.Drawing` ที่เคยรันบน
+เครื่อง Windows มาเป็น Python/Pillow (ใช้ Coda doc/table/filter/columns/sort
+เดียวกัน, layout เหมือนเดิม) แล้วค่อยขยายมาเป็น Apps Script + Drive layer
+ตามที่อธิบายด้านล่าง
 
 ## Architecture / pipeline
 
-1. **`scripts/coda_lark_report.py`** (GitHub Actions, `workflow_dispatch`
-   only — **cron is disabled**; triggered by Apps Script's
-   `dispatchReport()` at 07:05 Mon-Sat via the GitHub Actions API with
-   `ref: 'main'`) — fetches open POS-Daily rows from Coda, renders the
-   grouped table images (1-4), and pushes them plus `manifest.json` to the
-   `daily-images` branch (not `main`).
-2. **`scripts/lark-drive-thread.gs`** (Apps Script, triggered ~08:30
-   Mon-Sat via `runDailyLarkPost()`):
-   - `pullActionImagesToDrive_()` reads `manifest.json` from the
-     `daily-images` branch and saves images 1-4 into today's Drive folder
-     (`Lark - POS - Report/yyyy-MM-dd/`).
-   - `saveWeeklyImageToDrive()` renders the weekly production-plan image
-     (image 5) via `renderWeeklyReportImage_()` (shared helper, see below)
-     and saves it into the same folder.
-   - `sendTodayFolderToLark()` creates one Lark thread (internal room,
-     `LARK_CHAT_ID`) with all images in the folder, then sends a single
-     summary card to the external room via `Test_BOT_Webhook` (external
-     rooms can't receive threads — a webhook only supports one card).
-3. **`scripts/lark-appsscript-complete.gs`** — shared Lark helpers used by
-   both `.gs` files (`getLarkTenantToken_`, `uploadImageToLark_`,
+```mermaid
+flowchart TD
+    A["⏰ dispatchReport() ใน Apps Script<br/>07:05 จันทร์-เสาร์"] -->|"workflow_dispatch<br/>ref: main"| B["🐍 coda_lark_report.py<br/>GitHub Actions"]
+    B -->|"ดึงแถวเปิดอยู่"| C[("Coda<br/>POS-Daily table")]
+    B -->|"render ด้วย Pillow"| D["🖼️ รูป 1-4 + manifest.json<br/>(staging mode — ไม่ส่ง Lark)"]
+    D -->|"force-push"| E["🌿 branch daily-images"]
+
+    F["⏰ runDailyLarkPost() ใน Apps Script<br/>~08:30 จันทร์-เสาร์"] --> G["📥 pullActionImagesToDrive_()"]
+    E -->|"อ่าน manifest + รูป"| G
+    G --> H[("📁 Google Drive<br/>Lark - POS - Report/yyyy-MM-dd/")]
+    F --> I["📊 saveWeeklyImageToDrive()<br/>render รูปที่ 5 (แผนสัปดาห์)"]
+    I --> H
+    H --> J["📤 sendTodayFolderToLark()"]
+    J -->|"thread รูปทั้งหมด"| K["💬 ห้อง Internal<br/>(LARK_CHAT_ID)"]
+    J -->|"card สรุปใบเดียว<br/>ผ่าน webhook"| L["💬 ห้อง External<br/>(Test_BOT_Webhook)"]
+
+    style B fill:#fef3c7,stroke:#d97706
+    style G fill:#dbeafe,stroke:#2563eb
+    style I fill:#dbeafe,stroke:#2563eb
+    style J fill:#dbeafe,stroke:#2563eb
+    style K fill:#dcfce7,stroke:#16a34a
+    style L fill:#dcfce7,stroke:#16a34a
+```
+
+1. **`scripts/coda_lark_report.py`** (GitHub Actions, ทริกเกอร์แบบ
+   `workflow_dispatch` เท่านั้น — **ปิด cron ไปแล้ว** — ถูกเรียกโดย
+   `dispatchReport()` ของ Apps Script ตอน 07:05 จันทร์-เสาร์ ผ่าน GitHub
+   Actions API ด้วย `ref: 'main'`) — ดึงแถว POS-Daily ที่ยังเปิดอยู่จาก Coda,
+   render รูปตารางแบบจัดกลุ่ม (รูป 1-4), แล้ว push รูปพวกนั้นพร้อม
+   `manifest.json` ไปที่ branch `daily-images` (ไม่ใช่ `main`)
+2. **`scripts/lark-drive-thread.gs`** (Apps Script, ทริกเกอร์ ~08:30
+   จันทร์-เสาร์ ผ่าน `runDailyLarkPost()`):
+   - `pullActionImagesToDrive_()` อ่าน `manifest.json` จาก branch
+     `daily-images` แล้วเซฟรูป 1-4 ลงโฟลเดอร์รายวันใน Drive
+     (`Lark - POS - Report/yyyy-MM-dd/`)
+   - `saveWeeklyImageToDrive()` render รูปแผนการรับงานผลิตประจำสัปดาห์
+     (รูปที่ 5) ผ่าน `renderWeeklyReportImage_()` (helper ที่ใช้ร่วมกัน
+     ดูด้านล่าง) แล้วเซฟลงโฟลเดอร์เดียวกัน
+   - `sendTodayFolderToLark()` สร้าง Lark thread เดียว (ห้อง internal,
+     `LARK_CHAT_ID`) รวมรูปทั้งหมดในโฟลเดอร์ แล้วส่ง card สรุปใบเดียวเข้า
+     ห้อง external ผ่าน `Test_BOT_Webhook` (ห้อง external รับ thread ไม่ได้
+     — webhook รองรับแค่ card เดียว)
+3. **`scripts/lark-appsscript-complete.gs`** — helper Lark ที่ใช้ร่วมกัน
+   ระหว่างไฟล์ `.gs` ทั้งสอง (`getLarkTenantToken_`, `uploadImageToLark_`,
    `createThreadRoot_`, `replyImageInThread_`, `sendCardToExternal_`,
    `renderWeeklyReportImage_`, `readWeeklySheetData_`,
-   `formatBangkokTimestamp_`), plus a standalone weekly-only flow
-   (`sendWeeklyProductionReport()` / `sendWeeklyReportToLark_()`) kept as an
-   alternate/fallback trigger path that posts the weekly image on its own
-   instead of via the Drive-folder flow.
+   `formatBangkokTimestamp_`) พร้อม flow สำรองแบบส่งรูปสัปดาห์อย่างเดียว
+   (`sendWeeklyProductionReport()` / `sendWeeklyReportToLark_()`) เก็บไว้
+   เป็นทาง alternate/fallback ที่โพสต์รูปสัปดาห์เองแยกจาก flow ผ่านโฟลเดอร์
+   Drive
 
-Both `.gs` files must live in the **same Apps Script project** — 
-`lark-drive-thread.gs` calls helpers defined in `lark-appsscript-complete.gs`
-directly (no imports in Apps Script; everything in one project shares scope).
+ไฟล์ `.gs` ทั้งสองต้องอยู่ **โปรเจกต์ Apps Script เดียวกัน** —
+`lark-drive-thread.gs` เรียก helper ที่ประกาศใน `lark-appsscript-complete.gs`
+ได้ตรงๆ (Apps Script ไม่มี import, ทุกไฟล์ในโปรเจกต์เดียวกันแชร์ scope กัน)
 
-### Staging mode — GitHub Actions doesn't send to Lark directly
+### Staging mode — GitHub Actions ไม่ได้ส่งเข้า Lark เอง
 
-`coda_lark_report.py` has two modes, switched by env vars:
+`coda_lark_report.py` มี 2 โหมด สลับด้วย env var:
 
-- **Staging mode (current/real mode)** — `POS_STAGE_DIR=images` is set and
-  `POS_KEEP_DIRECT_LARK` is **not** set. The script only renders images and
-  writes `manifest.json` locally (`stage_images_for_gas(...)`); it never
-  calls the Lark send-message API. The workflow's next step then pushes
-  those files to the `daily-images` branch for Apps Script to pick up.
-- **Direct-send mode (legacy/unused)** — set `POS_KEEP_DIRECT_LARK=1` (and
-  drop/ignore `POS_STAGE_DIR`) to make the script call the Lark API itself
-  using `LARK_APP_ID` / `LARK_APP_SECRET` / `LARK_CHAT_ID` from the job env.
+- **Staging mode (โหมดที่ใช้จริงตอนนี้)** — ตั้ง `POS_STAGE_DIR=images` และ
+  **ไม่ได้** ตั้ง `POS_KEEP_DIRECT_LARK` สคริปต์จะ render รูปแล้วเขียน
+  `manifest.json` ไว้ในเครื่องเท่านั้น (`stage_images_for_gas(...)`) ไม่เรียก
+  Lark send-message API เลย จากนั้น step ถัดไปของ workflow จะ push ไฟล์
+  พวกนั้นขึ้น branch `daily-images` ให้ Apps Script ไปดึงต่อ
+- **Direct-send mode (ของเก่า/ไม่ได้ใช้แล้ว)** — ตั้ง `POS_KEEP_DIRECT_LARK=1`
+  (และไม่ใส่/ไม่สนใจ `POS_STAGE_DIR`) เพื่อให้สคริปต์เรียก Lark API เองโดยใช้
+  `LARK_APP_ID` / `LARK_APP_SECRET` / `LARK_CHAT_ID` จาก env ของ job
 
-Because the workflow currently sets `POS_STAGE_DIR: images` and does **not**
-set `POS_KEEP_DIRECT_LARK`, the `LARK_APP_ID` / `LARK_APP_SECRET` /
-`LARK_CHAT_ID` / `LARK_EXTERNAL_WEBHOOK_URL` env vars in the "Run POS Daily
-report" step (currently wired to the `_TEST` secrets — `APP_ID_TEST`,
-`APP_SECRET_TEST`, `LARK_CHAT_ID_TEST`, `LARK_WEBHOOK_URL_TEST`) are **not
-used for sending anything** — that code path is skipped entirely. They're
-effectively inert in the current configuration.
+เพราะ workflow ตอนนี้ตั้ง `POS_STAGE_DIR: images` ไว้ และ**ไม่ได้**ตั้ง
+`POS_KEEP_DIRECT_LARK` ตัวแปร `LARK_APP_ID` / `LARK_APP_SECRET` /
+`LARK_CHAT_ID` / `LARK_EXTERNAL_WEBHOOK_URL` ใน step "Run POS Daily report"
+(ตอนนี้ผูกกับ secrets ชุด `_TEST` — `APP_ID_TEST`, `APP_SECRET_TEST`,
+`LARK_CHAT_ID_TEST`, `LARK_WEBHOOK_URL_TEST`) **ไม่ถูกใช้ส่งอะไรเลย** —
+โค้ดส่วนนั้นถูก skip ไปทั้งหมด ถือว่าเป็นค่าที่ไม่มีผลอะไรในการตั้งค่าปัจจุบัน
 
-**The real destination and credentials are decided entirely by Apps
-Script's own Script Properties** (see section 3 below) — `LARK_CHAT_ID`,
-`Test_BOT_Webhook`, etc. set there, independent of whatever is in the GitHub
-Actions workflow env. So the `_TEST` secrets sitting in the workflow do not
-affect where the daily report actually gets sent.
+**ปลายทางและ credential จริงถูกกำหนดโดย Script Properties ของ Apps Script
+เท่านั้น** (ดู section 3 ด้านล่าง) — `LARK_CHAT_ID`, `Test_BOT_Webhook` ฯลฯ
+ที่ตั้งไว้ตรงนั้น แยกกันคนละที่จาก env ของ GitHub Actions workflow เลย
+ดังนั้น secrets `_TEST` ที่อยู่ใน workflow ไม่มีผลต่อปลายทางจริงที่รายงาน
+ประจำวันถูกส่งไป
 
-### External card title
+### หัว Card ฝั่ง External
 
-The card sent to the external Lark room gets its header from
-`sendCardToExternal_()` in `scripts/lark-appsscript-complete.gs`:
+Card ที่ส่งเข้าห้อง Lark ฝั่ง external เอาหัวข้อมาจาก `sendCardToExternal_()`
+ใน `scripts/lark-appsscript-complete.gs`:
 
 ```javascript
 header: { title: { tag: 'plain_text', content: '📦 รายงาน POS Daily / แผนการรับงานผลิตได้ประจำสัปดาห์ PD' }, template: 'blue' },
 ```
 
-Edit that line directly to change the card title — it's independent of
-`WEEKLY_REPORT_TITLE` (which still drives the Lark thread's root message
-text and the title printed inside the rendered weekly image).
+แก้บรรทัดนี้ตรงๆเพื่อเปลี่ยนหัว card — เป็นอิสระจาก `WEEKLY_REPORT_TITLE`
+(ตัวที่ยังคุมข้อความ root ของ Lark thread และหัวข้อที่พิมพ์อยู่ในรูปรายงาน
+สัปดาห์)
 
-## 1. Create the repo
+## 1. สร้าง repo
 
-Push this folder's contents to the root of a new GitHub repository (keep
-`.github/workflows/pos-daily-report.yml` at that exact path — GitHub Actions
-only looks for workflow files there).
+Push เนื้อหาในโฟลเดอร์นี้ไปที่ root ของ GitHub repository ใหม่ (เก็บ
+`.github/workflows/pos-daily-report.yml` ไว้ที่ path นี้เป๊ะๆ — GitHub
+Actions มองหาไฟล์ workflow ที่ path นี้เท่านั้น)
 
-## 2. Add repo secrets (GitHub Actions side)
+## 2. เพิ่ม repo secrets (ฝั่ง GitHub Actions)
 
-Go to **Settings → Secrets and variables → Actions → New repository secret**
-and add:
+ไปที่ **Settings → Secrets and variables → Actions → New repository secret**
+แล้วเพิ่ม:
 
-| Secret name | Value | Where to get it |
+| ชื่อ Secret | ค่า | หาได้จากไหน |
 |---|---|---|
 | `CODA_API_TOKEN` | Coda API token | coda.io → Account Settings → API Settings → Generate API token |
-| `LARK_APP_ID` | Lark custom app id | Lark Open Platform → your custom app → Credentials |
-| `LARK_APP_SECRET` | Lark custom app secret | same page as above |
-| `LARK_CHAT_ID` | Lark group chat ID, e.g. `oc_xxxxxxxxxxxxxxxxx` | Open the target group's details and copy its chat ID; the app bot must be in the group |
+| `LARK_APP_ID` | Lark custom app id | Lark Open Platform → custom app ของคุณ → Credentials |
+| `LARK_APP_SECRET` | Lark custom app secret | หน้าเดียวกับข้างบน |
+| `LARK_CHAT_ID` | Lark group chat ID เช่น `oc_xxxxxxxxxxxxxxxxx` | เปิดรายละเอียดกลุ่มปลายทางแล้ว copy chat ID — bot ต้องอยู่ในกลุ่มนั้นด้วย |
 
-The doc ID (`MiXbfRif1m`) and table ID (`table-OA56XddNFI`) are not secret —
-they're hardcoded defaults in `scripts/coda_lark_report.py`, but can be
-overridden with optional `CODA_DOC_ID` / `CODA_TABLE_ID` secrets or repo
-variables if you ever point this at a different doc/table.
+Doc ID (`MiXbfRif1m`) และ table ID (`table-OA56XddNFI`) ไม่ใช่ความลับ —
+เป็นค่า default ที่ hardcode ไว้ใน `scripts/coda_lark_report.py` แต่
+override ได้ด้วย secret หรือ repo variable `CODA_DOC_ID` / `CODA_TABLE_ID`
+ถ้าจะย้ายไปใช้ doc/table อื่น
 
-> **Note:** in the current workflow these Lark secrets are passed in as
-> `_TEST` variants (`APP_ID_TEST`, `APP_SECRET_TEST`, `LARK_CHAT_ID_TEST`,
-> `LARK_WEBHOOK_URL_TEST`) and — per "Staging mode" above — aren't actually
-> used to send anything, since `POS_STAGE_DIR` staging mode is active. The
-> real send credentials live only in Apps Script's Script Properties
-> (section 3).
+> **หมายเหตุ:** ใน workflow ปัจจุบัน secrets ชุด Lark พวกนี้ถูกส่งเข้าไปเป็น
+> `_TEST` variant (`APP_ID_TEST`, `APP_SECRET_TEST`, `LARK_CHAT_ID_TEST`,
+> `LARK_WEBHOOK_URL_TEST`) และตาม "Staging mode" ด้านบน — ไม่ได้ถูกใช้ส่ง
+> อะไรจริงๆ เพราะ staging mode (`POS_STAGE_DIR`) เปิดอยู่ credential ที่ใช้
+> ส่งจริงอยู่ที่ Script Properties ของ Apps Script เท่านั้น (section 3)
 
-## 3. Apps Script Properties (Apps Script side, separate from GitHub secrets)
+## 3. Apps Script Properties (ฝั่ง Apps Script, คนละที่กับ GitHub secrets)
 
-Set these under the Apps Script project's **Project Settings → Script
-Properties** (not GitHub secrets — Apps Script can't read those):
+ตั้งค่าพวกนี้ใน Apps Script project ที่ **Project Settings → Script
+Properties** (ไม่ใช่ GitHub secrets — Apps Script อ่าน secrets ของ GitHub
+ไม่ได้):
 
-| Property | Value |
+| Property | ค่า |
 |---|---|
-| `LARK_APP_ID`, `LARK_APP_SECRET` | same Lark custom app as above |
-| `GH_TOKEN` | classic PAT with `repo`/`contents:read` scope — reads `manifest.json` / images from the `daily-images` branch |
-| `LARK_CHAT_ID` | internal room for the daily thread (defaults to the `เทสโต้` room hardcoded in `lark-appsscript-complete.gs` if unset) |
-| `DRIVE_IMAGES_FOLDER_ID` | parent Drive folder ("Lark - POS - Report"); falls back to a hardcoded default if unset |
-| `Test_BOT_Webhook` | webhook URL for the external room's summary card |
-| `WEEKLY_LARK_WEBHOOK_URL` | legacy webhook, only used by the old `sendImageToLark_()` fallback |
+| `LARK_APP_ID`, `LARK_APP_SECRET` | custom app Lark ตัวเดียวกับข้างบน |
+| `GH_TOKEN` | classic PAT ที่มีสิทธิ์ `repo`/`contents:read` — ใช้อ่าน `manifest.json` / รูปจาก branch `daily-images` |
+| `LARK_CHAT_ID` | ห้อง internal สำหรับ thread รายวัน (ถ้าไม่ตั้งจะ fallback ไปใช้ห้อง `เทสโต้` ที่ hardcode ไว้ใน `lark-appsscript-complete.gs`) |
+| `DRIVE_IMAGES_FOLDER_ID` | โฟลเดอร์แม่ใน Drive ("Lark - POS - Report") ถ้าไม่ตั้งจะ fallback ไปใช้ค่า default ที่ hardcode ไว้ |
+| `Test_BOT_Webhook` | webhook URL สำหรับ card สรุปฝั่งห้อง external |
+| `WEEKLY_LARK_WEBHOOK_URL` | webhook เดิม ใช้แค่กับ fallback `sendImageToLark_()` ตัวเก่า |
 
-**This is the credential set that actually determines where the daily
-report gets sent** — see "Staging mode" above.
+**นี่คือชุด credential ที่กำหนดปลายทางจริงว่ารายงานจะถูกส่งไปที่ไหน** — ดู
+"Staging mode" ด้านบน
 
-## 4. What changed vs. the original PowerShell version
+## 4. เปลี่ยนไปจากเวอร์ชัน PowerShell เดิมยังไงบ้าง
 
-- **Runner**: `ubuntu-latest` instead of your Windows PC — cheaper and
-  faster on GitHub Actions.
-- **Rendering**: Pillow instead of `System.Drawing`. Thai text needs a
-  TrueType font with Thai glyphs, so the workflow installs the
-  `fonts-thai-tlwg` apt package (Waree family) before running the script.
-- **Coda access**: calls the public Coda REST API directly with an API
-  token (`requests`), rather than going through an MCP connector. The API's
-  `query` parameter only supports exact-match filters, not `IsBlank()`, so
-  the script fetches all rows (paginated, only the needed columns) and
-  filters for blank `รอคุยในที่ประชุม` client-side in Python — same result,
-  just done locally instead of server-side.
-- **Secrets**: Coda token, Lark app credentials, and chat ID are read from
-  environment variables backed by GitHub Actions secrets, never hardcoded.
-- **Delivery**: images no longer go straight to a webhook. GitHub Actions
-  now only stages images/manifest for Apps Script (see "Staging mode"
-  above); Apps Script (`lark-drive-thread.gs`) adds the weekly
-  production-plan image and posts everything as one Lark thread, plus a
-  single external-room summary card.
+- **Runner**: ใช้ `ubuntu-latest` แทนเครื่อง Windows ของคุณ — ถูกกว่าและเร็ว
+  กว่าบน GitHub Actions
+- **Rendering**: ใช้ Pillow แทน `System.Drawing` ตัวอักษรไทยต้องใช้ font
+  TrueType ที่มี glyph ไทย เลยให้ workflow ลง apt package `fonts-thai-tlwg`
+  (ตระกูล Waree) ก่อนรันสคริปต์
+- **การเข้าถึง Coda**: เรียก public Coda REST API ตรงๆด้วย API token
+  (`requests`) แทนการผ่าน MCP connector พารามิเตอร์ `query` ของ API รองรับ
+  แค่ exact-match filter ไม่รองรับ `IsBlank()` เลยต้องดึงทุกแถวมาก่อน
+  (แบ่งหน้า, ดึงแค่คอลัมน์ที่ต้องใช้) แล้วกรองแถวที่ `รอคุยในที่ประชุม`
+  ว่างเปล่าด้วย Python เอง — ผลลัพธ์เหมือนกัน แค่ทำที่ฝั่ง client แทนฝั่ง
+  server
+- **Secrets**: token ของ Coda, credential ของ Lark app, และ chat ID อ่านจาก
+  environment variable ที่ผูกกับ GitHub Actions secrets ไม่ hardcode เลย
+- **การส่งข้อมูล**: รูปไม่ได้ยิงตรงเข้า webhook แล้ว — GitHub Actions ตอนนี้
+  แค่เตรียมรูป/manifest ไว้ให้ Apps Script (ดู "Staging mode" ด้านบน) ส่วน
+  Apps Script (`lark-drive-thread.gs`) เป็นคนเพิ่มรูปแผนการรับงานผลิต
+  ประจำสัปดาห์แล้วโพสต์ทุกอย่างเป็น Lark thread เดียว พร้อม card สรุปเข้า
+  ห้อง external อีกใบ
 
-## 5. Files
+## 5. ไฟล์ในโปรเจกต์
 
 ```
-.github/workflows/pos-daily-report.yml        # workflow_dispatch only (no cron); runs coda_lark_report.py in staging mode
-.github/workflows/pos-daily-report-test.yml   # manual test run
-.github/workflows/find-lark-chat-id.yml       # one-off helper to look up a Lark chat_id
-scripts/coda_lark_report.py                   # Coda -> Pillow images 1-4 -> daily-images branch (staging mode; does not send to Lark)
-scripts/drive_upload.py                       # Drive upload helpers (service account), used only in the legacy direct-to-Drive fallback mode
-scripts/drive_check.py                        # pre-flight check: confirms the service account can write to the Shared Drive folder
-scripts/lark-appsscript-complete.gs           # shared Lark helpers + standalone weekly-report flow
-scripts/lark-drive-thread.gs                  # main daily flow: Drive folder -> Lark thread -> external card (the only step that actually sends to Lark)
-scripts/tests/                                # test scripts
+.github/workflows/pos-daily-report.yml        # workflow_dispatch เท่านั้น (ไม่มี cron); รัน coda_lark_report.py แบบ staging mode
+.github/workflows/pos-daily-report-test.yml   # รันทดสอบด้วยมือ
+.github/workflows/find-lark-chat-id.yml       # helper ใช้ครั้งเดียวสำหรับหา Lark chat_id
+scripts/coda_lark_report.py                   # Coda -> Pillow รูป 1-4 -> branch daily-images (staging mode; ไม่ได้ส่งเข้า Lark)
+scripts/drive_upload.py                       # helper อัปโหลด Drive (service account) ใช้เฉพาะโหมด fallback อัป Drive ตรงแบบเก่า
+scripts/drive_check.py                        # เช็คก่อนใช้งานจริง: ยืนยันว่า service account เขียนโฟลเดอร์ Shared Drive ได้
+scripts/lark-appsscript-complete.gs           # helper Lark ที่ใช้ร่วมกัน + flow รายงานสัปดาห์แบบ standalone
+scripts/lark-drive-thread.gs                  # flow หลักรายวัน: โฟลเดอร์ Drive -> Lark thread -> card external (ขั้นตอนเดียวที่ส่งเข้า Lark จริง)
+scripts/tests/                                # สคริปต์ทดสอบ
 requirements.txt                              # requests, Pillow
-latest_thread.json                            # written by GitHub Actions; read by the legacy thread-lookup path in lark-appsscript-complete.gs
-POS-LARK-HANDOFF.md                           # full handoff notes (setup history, troubleshooting, design decisions)
+latest_thread.json                            # เขียนโดย GitHub Actions; อ่านโดย flow หา thread แบบเก่าใน lark-appsscript-complete.gs
+POS-LARK-HANDOFF.md                           # บันทึก handoff แบบละเอียด (ประวัติการตั้งค่า, การแก้บัค, เหตุผลการออกแบบ)
 ```
 
-For the detailed history of design decisions and troubleshooting notes, see
-**[POS-LARK-HANDOFF.md](./POS-LARK-HANDOFF.md)**.
+ดูประวัติการออกแบบและการแก้ปัญหาแบบละเอียดได้ที่
+**[POS-LARK-HANDOFF.md](./POS-LARK-HANDOFF.md)**
 
-## 6. Testing before relying on the schedule
+## 6. ทดสอบก่อนจะพึ่ง schedule จริง
 
-Push the repo, add the secrets, then run the workflow manually once from the
-**Actions** tab ("Run workflow") and check the `daily-images` branch for the
-new images/manifest. Then run `runDailyLarkPost()` manually from the Apps
-Script editor and check both the internal Lark room (thread with all images)
-and the external room (summary card) before trusting the daily triggers.
+Push repo, เพิ่ม secrets แล้วรัน workflow ด้วยมือครั้งเดียวจากแท็บ
+**Actions** ("Run workflow") แล้วเช็ค branch `daily-images` ว่ามีรูป/manifest
+ใหม่ไหม จากนั้นรัน `runDailyLarkPost()` ด้วยมือจาก Apps Script editor แล้ว
+เช็คทั้งห้อง Lark internal (thread ที่มีรูปครบ) และห้อง external (card
+สรุป) ก่อนที่จะเชื่อ trigger รายวันจริง
