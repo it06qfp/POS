@@ -25,7 +25,7 @@ const WORKFLOW = 'pos-daily-report.yml';
 const WEEKLY_SHEET_ID = '12cIDbt13wPfxqOCkX4l3x6O5wbudoB4KixycF1TgSX0';
 const WEEKLY_SHEET_GID = 0;
 const WEEKLY_SHEET_RANGE = 'B2:L14';
-const WEEKLY_REPORT_TITLE = 'รายงานแผนการรับงานผลิตได้ประจำสัปดาห์ PD';
+const WEEKLY_REPORT_TITLE = 'POS Daily Meeting';
 // webhook เดิม (ส่งรูปตรงเข้าห้อง ไม่ผ่าน thread) — ย้ายไปเก็บใน Script Property
 // ชื่อ WEEKLY_LARK_WEBHOOK_URL แล้ว: repo นี้เป็น public repo ห้าม hardcode URL webhook
 // เพราะใครก็โพสต์เข้าห้องได้ถ้ารู้ URL (ดู getWeeklyWebhook_())
